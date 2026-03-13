@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.claude/
+*.env
+*.env.local
+package-lock.json
+logs/
+*.log
+docs/
+tests/
+exports/

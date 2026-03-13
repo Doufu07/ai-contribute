@@ -57,6 +57,14 @@ npx ai-contribute -d src/components -v
 # Only analyze backend source directory
 # 只分析后端源码目录
 npx ai-contribute /path/to/backend -d lib -v
+
+# Analyze contributions since a specific date
+# 分析指定日期之后的贡献
+npx ai-contribute --since 2026-01-01
+
+# Generate detailed log files
+# 生成详细的日志文件
+npx ai-contribute --log
 ```
 
 ## Commands / 命令
@@ -76,7 +84,9 @@ npx ai-contribute [path] [options]
 #   -t, --tools <tools>     Comma-separated list of tools (claude,codex,cursor,gemini,opencode,trae,all)
 #   --verification <mode>   Verification mode: strict, relaxed (default), historical / 验证模式
 #   -d, --directory <dir>   Only analyze files in specific directory (e.g., src, lib) / 只分析指定目录
+#   --since <date>          Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD) / 只分析指定日期后的贡献
 #   -v, --verbose           Show detailed output (directories, files, timeline) / 显示详细输出
+#   --log                   Generate a detailed log file of AI contributions / 生成详细的 AI 贡献日志文件
 ```
 
 ### List Detected Tools / 列出检测到的工具
@@ -104,12 +114,13 @@ Example output:
 Show detailed contribution statistics for individual files.
 
 ```bash
-npx ai-contribute files [path] [-n LIMIT] [-d DIR] [--verification MODE]
+npx ai-contribute files [path] [-n LIMIT] [-d DIR] [--verification MODE] [--since DATE]
 
 # Options:
 #   -n, --limit <number>    Number of files to show (default: 20)
 #   -d, --directory <dir>   Only analyze files in specific directory
 #   --verification <mode>   Verification mode (strict/relaxed/historical)
+#   --since <date>          Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD)
 ```
 
 ### Contribution History / 贡献历史
@@ -117,12 +128,13 @@ npx ai-contribute files [path] [-n LIMIT] [-d DIR] [--verification MODE]
 Show a timeline of AI contributions.
 
 ```bash
-npx ai-contribute history [path] [-n LIMIT] [-d DIR] [--verification MODE]
+npx ai-contribute history [path] [-n LIMIT] [-d DIR] [--verification MODE] [--since DATE]
 
 # Options:
 #   -n, --limit <number>    Number of entries to show (default: 20)
 #   -d, --directory <dir>   Only analyze files in specific directory
 #   --verification <mode>   Verification mode (strict/relaxed/historical)
+#   --since <date>          Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD)
 ```
 
 ### Session List / 会话列表
@@ -130,11 +142,12 @@ npx ai-contribute history [path] [-n LIMIT] [-d DIR] [--verification MODE]
 List verified AI sessions found for the repository.
 
 ```bash
-npx ai-contribute sessions [path] [-t TOOLS] [-d DIR]
+npx ai-contribute sessions [path] [-t TOOLS] [-d DIR] [--since DATE]
 
 # Options:
 #   -t, --tools <tools>     Filter by specific tools (comma-separated)
 #   -d, --directory <dir>   Only analyze files in specific directory
+#   --since <date>          Only show sessions since date (YYYYMMDD or YYYY-MM-DD)
 ```
 
 ## Output Example / 输出示例

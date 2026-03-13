@@ -6,6 +6,7 @@ import ignore, { type Ignore } from 'ignore';
 
 /**
  * Handles Git operations and project file analysis
+ * 处理 Git 操作和项目文件分析
  */
 export class GitAnalyzer {
   private projectPath: string;
@@ -18,9 +19,11 @@ export class GitAnalyzer {
 
   /**
    * Get project changes since a specific time using Git-First strategy
+   * 使用 Git 优先策略获取自指定时间以来的项目变更
    */
   getProjectChanges(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string } | undefined {
     // 1. Check Git reliability first
+    // 1. 首先检查 Git 是否可靠
     if (!this.isGitReliable()) {
       return this.getProjectChangesFallback(since, targetDirectory);
     }
@@ -32,34 +35,42 @@ export class GitAnalyzer {
       let totalLinesOfChangedFiles = 0;
 
       // 2. Get base commit
+      // 2. 获取基准提交（指定时间之前的最近一次提交）
       const baseCommit = this.getGitBaseCommit(since);
       if (!baseCommit) {
         // Fallback to time-based if no base commit found
+        // 如果找不到基准提交，回退到基于时间的分析
         return this.getProjectChangesFallback(since, targetDirectory);
       }
 
       // 3. Get changes from Git (committed + staged + working tree)
+      // 3. 从 Git 获取变更（包含已提交、暂存区和工作区的变更）
       const gitChangesMap = this.getGitChangesFromBase(baseCommit);
       
       // 4. Get untracked files
+      // 4. 获取未跟踪的文件
       const untrackedFiles = this.getUntrackedFiles();
 
       // Process Git changes
+      // 处理 Git 变更
       const fileStats = new Map<string, { added: number, removed: number }>();
 
       if (gitChangesMap) {
         for (const [filePath, stats] of gitChangesMap.entries()) {
             // Filter by target directory if set
+            // 如果设置了目标目录，则进行过滤
             if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
                 continue;
             }
             
             // Check if file is ignored
+            // 检查文件是否被忽略
             if (this.ignores.ignores(filePath)) {
                 continue;
             }
 
             // Only consider files that are text files
+            // 只考虑文本文件
             if (!this.isTextFile(filePath)) {
                 continue;
             }
@@ -70,6 +81,7 @@ export class GitAnalyzer {
             fileStats.set(filePath, { added: stats.added, removed: stats.removed });
 
             // If file exists, get current lines
+            // 如果文件存在，获取当前行数
             const fullPath = path.resolve(this.projectPath, filePath);
             if (fs.existsSync(fullPath)) {
                 try {
@@ -77,20 +89,23 @@ export class GitAnalyzer {
                     totalLinesOfChangedFiles += content.split('\n').length;
                 } catch {
                     // Ignore read errors
+                    // 忽略读取错误
                 }
             }
         }
       }
 
       // 5. Get file diffs for analysis
+      // 5. 获取文件差异内容用于分析
       const fileDiffs = new Map<string, string>();
       if (baseCommit) {
           try {
             // Get diff content for tracked files
+            // 获取已跟踪文件的差异内容
             const diffContent = execFileSync('git', [
                 'diff',
                 baseCommit,
-                '--unified=0', // No context lines to save space
+                '--unified=0', // No context lines to save space / 不显示上下文行以节省空间
                 '--no-color',
             ], {
                 cwd: this.projectPath,
@@ -102,22 +117,27 @@ export class GitAnalyzer {
             this.parseDiffContent(diffContent, fileDiffs);
           } catch (e) {
               // Ignore diff errors
+              // 忽略 diff 错误
           }
       }
 
       // Process untracked files
+      // 处理未跟踪的文件
       for (const filePath of untrackedFiles) {
         // Filter by target directory
+        // 过滤目标目录
         if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
             continue;
         }
 
         // Check if file is ignored
+        // 检查文件是否被忽略
         if (this.ignores.ignores(filePath)) {
             continue;
         }
 
         // Only consider files that are text files
+        // 只考虑文本文件
         if (!this.isTextFile(filePath)) {
             continue;
         }
@@ -133,6 +153,7 @@ export class GitAnalyzer {
             fileStats.set(filePath, { added: lines, removed: 0 });
             
             // For untracked files, the whole content is the diff
+            // 对于未跟踪文件，整个内容即为差异
             fileDiffs.set(filePath, `New file: ${filePath}\n${content}`);
         } catch {
             // Ignore
@@ -158,17 +179,21 @@ export class GitAnalyzer {
 
   /**
    * Fallback method using mtime + glob
+   * 回退方法：使用文件修改时间 (mtime) 和 glob 匹配
    */
   private getProjectChangesFallback(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string } | undefined {
     try {
       // 1. Get all files and filter by mtime >= since
+      // 1. 获取所有文件并过滤出修改时间 >= since 的文件
       const allFiles = this.getRepoFilesFromGlob();
       const activeFiles = new Set<string>();
       
       // Filter by target directory if set
+      // 如果设置了目标目录，则进行过滤
       const targetFiles = this.filterByDirectory(allFiles, targetDirectory);
 
       // Check mtime for each file
+      // 检查每个文件的修改时间
       for (const filePath of targetFiles) {
         const fullPath = path.resolve(this.projectPath, filePath);
         try {
@@ -194,6 +219,7 @@ export class GitAnalyzer {
       }
 
       // 2. Try to get Git changes for all files
+      // 2. 尝试获取所有文件的 Git 变更
       const gitChangesMap = this.getGitChangesMap(since);
       
       const isGitAvailable = this.isGitReliable();
@@ -221,6 +247,7 @@ export class GitAnalyzer {
       const fileStats = new Map<string, { added: number, removed: number }>();
 
       // 3. Iterate active files and aggregate stats
+      // 3. 遍历活跃文件并聚合统计信息
       const verifiedActiveFiles = new Set<string>();
       
       for (const filePath of activeFiles) {
@@ -243,8 +270,10 @@ export class GitAnalyzer {
         } else {
           if (trackedFiles.has(filePath)) {
             // Tracked file but no git changes => content unmodified
+            // 已跟踪文件但无 Git 变更 => 内容未修改
           } else {
              // Untracked file => assume whole file is new
+             // 未跟踪文件 => 假设整个文件都是新增的
              totalLinesAdded += currentFileLines;
              totalLinesOfChangedFiles += currentFileLines;
              verifiedActiveFiles.add(filePath);
@@ -286,6 +315,7 @@ export class GitAnalyzer {
 
   /**
    * Get all files in the repository
+   * 获取仓库中的所有文件
    */
   getRepoFiles(targetDirectory?: string): string[] {
     const gitFiles = this.getRepoFilesFromGit();
@@ -298,6 +328,7 @@ export class GitAnalyzer {
 
   /**
    * Get the git remote origin URL
+   * 获取 git 远程仓库 URL
    */
   getRepoUrl(): string | undefined {
     try {
@@ -458,6 +489,7 @@ export class GitAnalyzer {
 
   /**
    * Parse unified diff output to calculate added/removed lines, ignoring blank lines
+   * 解析统一差异 (unified diff) 输出以计算增加/删除的行数，忽略空行
    */
   private parseDiffForStats(diffOutput: string, changesMap: Map<string, { added: number, removed: number }>) {
     const lines = diffOutput.split('\n');
@@ -475,6 +507,7 @@ export class GitAnalyzer {
       } else if (currentFile) {
         if (line.startsWith('+') && !line.startsWith('+++')) {
           // Added line: check if it's blank/whitespace only
+          // 新增行：检查是否仅为空白行
           const content = line.substring(1);
           if (content.trim().length > 0) {
             const current = changesMap.get(currentFile) || { added: 0, removed: 0 };
@@ -483,6 +516,7 @@ export class GitAnalyzer {
           }
         } else if (line.startsWith('-') && !line.startsWith('---')) {
           // Removed line: check if it's blank/whitespace only
+          // 删除行：检查是否仅为空白行
           const content = line.substring(1);
           if (content.trim().length > 0) {
             const current = changesMap.get(currentFile) || { added: 0, removed: 0 };

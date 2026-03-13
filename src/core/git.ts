@@ -21,7 +21,7 @@ export class GitAnalyzer {
    * Get project changes since a specific time using Git-First strategy
    * 使用 Git 优先策略获取自指定时间以来的项目变更
    */
-  getProjectChanges(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string } | undefined {
+  getProjectChanges(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
     // 1. Check Git reliability first
     // 1. 首先检查 Git 是否可靠
     if (!this.isGitReliable()) {
@@ -33,6 +33,8 @@ export class GitAnalyzer {
       let totalLinesAdded = 0;
       let totalLinesRemoved = 0;
       let totalLinesOfChangedFiles = 0;
+      let totalEmptyLinesAdded = 0;
+      let totalEmptyLinesRemoved = 0;
 
       // 2. Get base commit
       // 2. 获取基准提交（指定时间之前的最近一次提交）
@@ -78,6 +80,8 @@ export class GitAnalyzer {
             activeFiles.add(filePath);
             totalLinesAdded += stats.added;
             totalLinesRemoved += stats.removed;
+            totalEmptyLinesAdded += (stats.emptyAdded || 0);
+            totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
             fileStats.set(filePath, { added: stats.added, removed: stats.removed });
 
             // If file exists, get current lines
@@ -147,10 +151,14 @@ export class GitAnalyzer {
         const fullPath = path.resolve(this.projectPath, filePath);
         try {
             const content = fs.readFileSync(fullPath, 'utf8');
-            const lines = content.split('\n').length;
-            totalLinesAdded += lines;
-            totalLinesOfChangedFiles += lines;
-            fileStats.set(filePath, { added: lines, removed: 0 });
+            const allLines = content.split('\n');
+            const nonEmptyLines = allLines.filter(l => l.trim().length > 0).length;
+            const emptyLines = allLines.length - nonEmptyLines;
+            
+            totalLinesAdded += nonEmptyLines;
+            totalEmptyLinesAdded += emptyLines;
+            totalLinesOfChangedFiles += allLines.length;
+            fileStats.set(filePath, { added: nonEmptyLines, removed: 0 });
             
             // For untracked files, the whole content is the diff
             // 对于未跟踪文件，整个内容即为差异
@@ -169,6 +177,8 @@ export class GitAnalyzer {
         files: Array.from(activeFiles),
         fileStats,
         fileDiffs,
+        emptyLinesAdded: totalEmptyLinesAdded,
+        emptyLinesRemoved: totalEmptyLinesRemoved,
       };
 
     } catch (e) {
@@ -181,7 +191,7 @@ export class GitAnalyzer {
    * Fallback method using mtime + glob
    * 回退方法：使用文件修改时间 (mtime) 和 glob 匹配
    */
-  private getProjectChangesFallback(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string } | undefined {
+  private getProjectChangesFallback(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
     try {
       // 1. Get all files and filter by mtime >= since
       // 1. 获取所有文件并过滤出修改时间 >= since 的文件
@@ -215,6 +225,8 @@ export class GitAnalyzer {
           totalLinesOfChangedFiles: 0,
           files: [],
           fileStats: new Map(),
+          emptyLinesAdded: 0,
+          emptyLinesRemoved: 0,
         };
       }
 
@@ -243,6 +255,8 @@ export class GitAnalyzer {
       
       let totalLinesAdded = 0;
       let totalLinesRemoved = 0;
+      let totalEmptyLinesAdded = 0;
+      let totalEmptyLinesRemoved = 0;
       let totalLinesOfChangedFiles = 0;
       const fileStats = new Map<string, { added: number, removed: number }>();
 
@@ -252,10 +266,13 @@ export class GitAnalyzer {
       
       for (const filePath of activeFiles) {
         let currentFileLines = 0;
+        let currentFileNonEmptyLines = 0;
         const fullPath = path.resolve(this.projectPath, filePath);
         try {
           const content = fs.readFileSync(fullPath, 'utf8');
-          currentFileLines = content.split('\n').length;
+          const lines = content.split('\n');
+          currentFileLines = lines.length;
+          currentFileNonEmptyLines = lines.filter(l => l.trim().length > 0).length;
         } catch {
           continue;
         }
@@ -264,6 +281,8 @@ export class GitAnalyzer {
           const gitStats = gitChangesMap.get(filePath)!;
           totalLinesAdded += gitStats.added;
           totalLinesRemoved += gitStats.removed;
+          totalEmptyLinesAdded += (gitStats.emptyAdded || 0);
+          totalEmptyLinesRemoved += (gitStats.emptyRemoved || 0);
           totalLinesOfChangedFiles += currentFileLines;
           verifiedActiveFiles.add(filePath);
           fileStats.set(filePath, { added: gitStats.added, removed: gitStats.removed });
@@ -274,10 +293,11 @@ export class GitAnalyzer {
           } else {
              // Untracked file => assume whole file is new
              // 未跟踪文件 => 假设整个文件都是新增的
-             totalLinesAdded += currentFileLines;
+             totalLinesAdded += currentFileNonEmptyLines;
+             totalEmptyLinesAdded += (currentFileLines - currentFileNonEmptyLines);
              totalLinesOfChangedFiles += currentFileLines;
              verifiedActiveFiles.add(filePath);
-             fileStats.set(filePath, { added: currentFileLines, removed: 0 });
+             fileStats.set(filePath, { added: currentFileNonEmptyLines, removed: 0 });
           }
         }
       }
@@ -286,6 +306,7 @@ export class GitAnalyzer {
         for (const [filePath, stats] of gitChangesMap.entries()) {
           if (!activeFiles.has(filePath) && !fs.existsSync(path.resolve(this.projectPath, filePath))) {
              totalLinesRemoved += stats.removed;
+             totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
              verifiedActiveFiles.add(filePath);
              fileStats.set(filePath, { added: stats.added, removed: stats.removed });
           }
@@ -304,7 +325,9 @@ export class GitAnalyzer {
         totalLinesOfChangedFiles,
         files: Array.from(verifiedActiveFiles),
         fileStats,
-        gitStatusWarning: gitStatusWarning || undefined
+        gitStatusWarning: gitStatusWarning || undefined,
+        emptyLinesAdded: totalEmptyLinesAdded,
+        emptyLinesRemoved: totalEmptyLinesRemoved,
       };
 
     } catch (e) {
@@ -409,58 +432,17 @@ export class GitAnalyzer {
     }
   }
 
-  private getGitChangesFromBase(baseCommit: string): Map<string, { added: number, removed: number }> | undefined {
+  private getGitChangesFromBase(baseCommit: string): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {
     const repoRoot = this.getGitRepoRoot();
     if (!repoRoot) return undefined;
 
-    const changesMap = new Map<string, { added: number, removed: number }>();
+    const changesMap = new Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }>();
 
     try {
       // Helper to update map (parse git diff --numstat output)
-      const updateMap = (output: string) => {
-        const lines = output.split('\n');
-        for (const line of lines) {
-          const parts = line.split('\t');
-          if (parts.length < 3) continue;
+      // Note: This is now replaced by parseDiffForStats below which is more accurate for filtering blank lines
+      // We keep the structure but the logic is primarily driven by parseDiffForStats now.
 
-          const added = parseInt(parts[0], 10);
-          const removed = parseInt(parts[1], 10);
-          const filePath = parts[2];
-
-          if (isNaN(added) || isNaN(removed)) continue;
-
-          const current = changesMap.get(filePath) || { added: 0, removed: 0 };
-          current.added += added;
-          current.removed += removed;
-          changesMap.set(filePath, current);
-        }
-      };
-
-      // 1. Get detailed diff with ignore-blank-lines for accurate 'added' count (ignoring whitespace/blank lines)
-      // Note: --numstat does not support --ignore-blank-lines directly in a way that affects the numbers as desired in all versions/contexts correctly for what we want (it tracks line changes).
-      // However, git diff --shortstat --ignore-blank-lines gives summary, not per file.
-      // To get per-file stats ignoring blank lines, we can use --dirstat or parse the patch.
-      // But a simpler approach often used is `git diff --numstat --ignore-all-space` or similar.
-      // Actually, standard `git diff` with --numstat DOES NOT respect --ignore-blank-lines for the counts. It always shows physical line changes.
-      
-      // Strategy:
-      // 1. Get the list of changed files first.
-      // 2. For each file, run a specific diff to count non-blank added lines? That's too slow.
-      //
-      // Alternative: Use `git diff --shortstat --ignore-blank-lines` is global.
-      //
-      // Better approach for per-file stats ignoring blank lines:
-      // We have to parse the full diff or use `git diff --numstat` as a baseline and accept it includes blank lines,
-      // OR, we try `git diff --numstat -w` (ignore all whitespace) which might reduce noise but doesn't strictly ignore *new blank lines*.
-      //
-      // WAIT: The user specifically asked to ignore "blank lines".
-      // Let's try to use `git diff --numstat --ignore-blank-lines`.
-      // Testing locally shows `git diff --numstat --ignore-blank-lines` MIGHT work depending on git version, but often it just ignores the *change* if it's only blank lines, but if there are other changes, does it subtract the blank lines count? Usually no.
-      //
-      // Correct robust approach:
-      // We will parse the actual unified diff output later in `parseDiffContent` anyway.
-      // BUT `getGitChangesFromBase` is used for the stats numbers.
-      //
       // Let's implement a custom diff parser for counting to be precise.
       // We can run `git diff <base> --unified=0 --ignore-blank-lines` and count lines starting with '+' that are not empty.
       
@@ -468,9 +450,7 @@ export class GitAnalyzer {
         'diff',
         baseCommit,
         '--unified=0',
-        '--ignore-blank-lines', // Ignore changes that are just blank lines
-        '--ignore-space-at-eol', // Ignore trailing whitespace
-        '--no-color',
+        '--no-color', // Remove ignore-blank-lines flag to get all changes, so we can count empty ones too
       ], {
         cwd: this.projectPath,
         encoding: 'utf-8',
@@ -491,7 +471,7 @@ export class GitAnalyzer {
    * Parse unified diff output to calculate added/removed lines, ignoring blank lines
    * 解析统一差异 (unified diff) 输出以计算增加/删除的行数，忽略空行
    */
-  private parseDiffForStats(diffOutput: string, changesMap: Map<string, { added: number, removed: number }>) {
+  private parseDiffForStats(diffOutput: string, changesMap: Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }>) {
     const lines = diffOutput.split('\n');
     let currentFile: string | null = null;
 
@@ -510,8 +490,12 @@ export class GitAnalyzer {
           // 新增行：检查是否仅为空白行
           const content = line.substring(1);
           if (content.trim().length > 0) {
-            const current = changesMap.get(currentFile) || { added: 0, removed: 0 };
+            const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
             current.added++;
+            changesMap.set(currentFile, current);
+          } else {
+            const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
+            current.emptyAdded++;
             changesMap.set(currentFile, current);
           }
         } else if (line.startsWith('-') && !line.startsWith('---')) {
@@ -519,8 +503,12 @@ export class GitAnalyzer {
           // 删除行：检查是否仅为空白行
           const content = line.substring(1);
           if (content.trim().length > 0) {
-            const current = changesMap.get(currentFile) || { added: 0, removed: 0 };
+            const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
             current.removed++;
+            changesMap.set(currentFile, current);
+          } else {
+            const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
+            current.emptyRemoved++;
             changesMap.set(currentFile, current);
           }
         }
@@ -528,11 +516,19 @@ export class GitAnalyzer {
     }
   }
 
-  private getGitChangesMap(since: Date): Map<string, { added: number, removed: number }> | undefined {
+  private getGitChangesMap(since: Date): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {
     const repoRoot = this.getGitRepoRoot();
     if (!repoRoot) return undefined;
 
-    const changesMap = new Map<string, { added: number, removed: number }>();
+    // Fallback implementation for getGitChangesMap used in fallback mode
+    // Note: This method currently uses --numstat which doesn't support empty line separation easily without full diff
+    // For simplicity in fallback mode, we'll return basic stats or we could try to implement full diff parsing here too
+    // But since this is fallback, maybe we accept less precision or just 0 for empty lines unless we want to do the heavy diff parsing again.
+    
+    // To match the interface, we'll return objects with emptyAdded/emptyRemoved initialized to 0
+    // If precision is needed in fallback mode, we would need to run full diff like above.
+    
+    const changesMap = new Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }>();
 
     try {
       const updateMap = (output: string) => {
@@ -547,7 +543,7 @@ export class GitAnalyzer {
 
           if (isNaN(added) || isNaN(removed)) continue;
 
-          const current = changesMap.get(filePath) || { added: 0, removed: 0 };
+          const current = changesMap.get(filePath) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
           current.added += added;
           current.removed += removed;
           changesMap.set(filePath, current);

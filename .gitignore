@@ -10,4 +10,5 @@ logs/
 *.log
 docs/
 tests/
+tests/
 exports/

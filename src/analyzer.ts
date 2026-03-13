@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import ignore, { type Ignore } from 'ignore';
+import { DEFAULT_IGNORES } from './config/ignore.js';
 import {
   AISession,
   AITool,
@@ -42,32 +43,7 @@ export class ContributionAnalyzer {
     const ignoreFactory = (ignore as unknown as { default?: () => Ignore }).default
       ?? (ignore as unknown as () => Ignore);
     this.ignores = ignoreFactory();
-    this.ignores.add([
-      '.git',
-      'node_modules',
-      'dist',
-      'build',
-      'coverage',
-      'package-lock.json',
-      'yarn.lock',
-      'pnpm-lock.yaml',
-      '**/*.pyc',
-      '__pycache__',
-      '.DS_Store',
-      '.next',
-      '.nuxt',
-      '.venv',
-      '*.iml',
-      '.idea',
-      'target',
-      '*.log',
-      'venv',
-      // Documentation files
-      '**/*.md',
-      '**/*.mdx',
-      '**/*.txt',
-      '**/*.rst'
-    ]);
+    this.ignores.add(DEFAULT_IGNORES);
 
     this.gitAnalyzer = new GitAnalyzer(this.projectPath, this.ignores);
   }

@@ -5,6 +5,83 @@ import { glob } from 'glob';
 import ignore, { type Ignore } from 'ignore';
 import { isLineEmptyOrWhitespace } from '../utils/utils.js';
 
+export interface GitMetadata {
+  branch?: string;
+  username?: string;
+  email?: string;
+  remoteUrl?: string;
+}
+
+/**
+ * Get Git metadata for a project path
+ * 获取指定项目路径的 Git 元数据
+ */
+export function getGitMetadata(projectPath: string): GitMetadata {
+    const info: GitMetadata = {};
+    
+    // Check if git is available
+    try {
+      execFileSync('git', ['status', '--porcelain'], {
+        cwd: projectPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+      });
+    } catch {
+      return info;
+    }
+
+    try {
+       // Get Branch / 获取当前分支
+       try {
+         const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+            cwd: projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+         }).trim();
+         if (branch) info.branch = branch;
+       } catch {}
+
+       // Get Username / 获取用户名
+       try {
+         let username = execFileSync('git', ['config', 'user.name'], {
+            cwd: projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+         }).trim();
+         // Remove surrounding quotes (including smart quotes)
+         username = username.replace(/^['"‘“](.*)['"’”]$/, '$1');
+         if (username) info.username = username;
+       } catch {}
+
+       // Get Email / 获取邮箱
+       try {
+         let email = execFileSync('git', ['config', 'user.email'], {
+            cwd: projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+         }).trim();
+         // Remove surrounding quotes
+         email = email.replace(/^['"‘“](.*)['"’”]$/, '$1');
+         if (email) info.email = email;
+       } catch {}
+
+       // Get Remote URL / 获取远程仓库地址
+       try {
+        const remote = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+          cwd: projectPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (remote) info.remoteUrl = remote;
+       } catch {}
+
+    } catch (e) {
+      // Ignore errors
+    }
+    return info;
+}
+
 /**
  * Handles Git operations and project file analysis
  * 处理 Git 操作和项目文件分析
@@ -16,6 +93,14 @@ export class GitAnalyzer {
   constructor(projectPath: string, ignores: Ignore) {
     this.projectPath = projectPath;
     this.ignores = ignores;
+  }
+
+  /**
+   * Get Git metadata (branch, user, email, remote)
+   * 获取 Git 元数据（分支、用户名、邮箱、远程地址）
+   */
+  getGitInfo(): GitMetadata {
+    return getGitMetadata(this.projectPath);
   }
 
   /**

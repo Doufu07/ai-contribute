@@ -4,16 +4,17 @@ import * as path from 'path';
 import chalk from 'chalk';
 import ignore from 'ignore';
 import { GitAnalyzer } from '../core/git.js';
+import { DEFAULT_IGNORES } from '../config/ignore.js';
 
 /**
  * Execute Git analysis logic
  */
 export function runGitAnalysis(resolvedPath: string, sinceDate: Date, directory?: string) {
-    console.log(chalk.blue(`Analyzing Git changes in ${resolvedPath} since ${sinceDate.toISOString()}...`));
+    console.log(chalk.blue(`正在分析 ${resolvedPath} 中自 ${sinceDate.toISOString()} 以来的 Git 变更...`));
     
     // Initialize GitAnalyzer with default ignores
     const ig = ignore();
-    ig.add(['.git', 'node_modules', 'dist', 'build', 'coverage', '**/*.pyc', '__pycache__', '.DS_Store']);
+    ig.add(DEFAULT_IGNORES);
     
     // Try to read .gitignore
     const gitignorePath = path.join(resolvedPath, '.gitignore');
@@ -30,9 +31,23 @@ export function runGitAnalysis(resolvedPath: string, sinceDate: Date, directory?
     const changes = analyzer.getProjectChanges(sinceDate, directory);
 
     if (changes) {
+        if (changes.gitStatusWarning) {
+            console.warn(chalk.yellow(`警告: ${changes.gitStatusWarning}`));
+        }
+        
+        // Print Git metadata
+        const gitInfo = analyzer.getGitInfo();
+        if (gitInfo.branch || gitInfo.username || gitInfo.email || gitInfo.remoteUrl) {
+            console.log(chalk.cyan('\n--- Git 信息 ---'));
+            if (gitInfo.branch) console.log(chalk.gray(`当前分支: ${gitInfo.branch}`));
+            if (gitInfo.username) console.log(chalk.gray(`用户名称: ${gitInfo.username}`));
+            if (gitInfo.email) console.log(chalk.gray(`用户邮箱: ${gitInfo.email}`));
+            if (gitInfo.remoteUrl) console.log(chalk.gray(`远程仓库: ${gitInfo.remoteUrl}`));
+        }
+        
         printGitAnalysisResult(changes);
     } else {
-        console.error(chalk.red('Failed to get Git changes.'));
+        console.error(chalk.red('获取 Git 变更失败。'));
         process.exit(1);
     }
 }
@@ -53,16 +68,15 @@ export function printGitAnalysisResult(changes: {
   emptyLinesAdded: number;
   emptyLinesRemoved: number;
 }) {
-  console.log('--- Git Analysis Result ---');
-  console.log(`Total Files Changed: ${changes.totalFiles}`);
-  console.log(`Lines Added: ${changes.linesAdded}`);
-  console.log(`Lines Removed: ${changes.linesRemoved}`);
-  console.log(`Net Increment: ${changes.netLinesAdded}`);
-  console.log(`Total Lines of Changed Files: ${changes.totalLinesOfChangedFiles}`);
-  console.log(`Empty Lines Added: ${changes.emptyLinesAdded}`);
-  console.log(`Empty Lines Removed: ${changes.emptyLinesRemoved}`);
+  console.log('--- Git 分析结果 ---');
+  console.log(`变更文件总数: ${changes.totalFiles}`);
+  console.log(`新增代码行数: ${changes.linesAdded}`);
+  console.log(`删除代码行数: ${changes.linesRemoved}`);
+  console.log(`变更文件总行数: ${changes.totalLinesOfChangedFiles}`);
+  console.log(`新增空行数: ${changes.emptyLinesAdded}`);
+  console.log(`删除空行数: ${changes.emptyLinesRemoved}`);
   
-  console.log('\nChanged Files:');
+  console.log('\n变更文件列表:');
   changes.files.forEach(f => {
     const stats = changes.fileStats.get(f);
     const statsStr = stats ? `(+${stats.added}, -${stats.removed})` : '';
@@ -70,6 +84,6 @@ export function printGitAnalysisResult(changes: {
   });
 
   if (changes.gitStatusWarning) {
-    console.warn(`\nWarning: ${changes.gitStatusWarning}`);
+    console.warn(`\n警告: ${changes.gitStatusWarning}`);
   }
 }

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { glob } from 'glob';
 import ignore, { type Ignore } from 'ignore';
+import { isLineEmptyOrWhitespace } from '../utils/utils.js';
 
 /**
  * Handles Git operations and project file analysis
@@ -152,7 +153,7 @@ export class GitAnalyzer {
         try {
             const content = fs.readFileSync(fullPath, 'utf8');
             const allLines = content.split('\n');
-            const nonEmptyLines = allLines.filter(l => l.trim().length > 0).length;
+            const nonEmptyLines = allLines.filter(l => !isLineEmptyOrWhitespace(l)).length;
             const emptyLines = allLines.length - nonEmptyLines;
             
             totalLinesAdded += nonEmptyLines;
@@ -272,7 +273,7 @@ export class GitAnalyzer {
           const content = fs.readFileSync(fullPath, 'utf8');
           const lines = content.split('\n');
           currentFileLines = lines.length;
-          currentFileNonEmptyLines = lines.filter(l => l.trim().length > 0).length;
+          currentFileNonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
         } catch {
           continue;
         }
@@ -489,7 +490,7 @@ export class GitAnalyzer {
           // Added line: check if it's blank/whitespace only
           // 新增行：检查是否仅为空白行
           const content = line.substring(1);
-          if (content.trim().length > 0) {
+          if (!isLineEmptyOrWhitespace(content)) {
             const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
             current.added++;
             changesMap.set(currentFile, current);
@@ -502,7 +503,7 @@ export class GitAnalyzer {
           // Removed line: check if it's blank/whitespace only
           // 删除行：检查是否仅为空白行
           const content = line.substring(1);
-          if (content.trim().length > 0) {
+          if (!isLineEmptyOrWhitespace(content)) {
             const current = changesMap.get(currentFile) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
             current.removed++;
             changesMap.set(currentFile, current);

@@ -62,6 +62,10 @@ npx ai-contribute /path/to/backend -d lib -v
 # 分析指定日期之后的贡献
 npx ai-contribute --since 2026-01-01
 
+# Show detailed git analysis (added/removed/empty lines)
+# 显示详细的 Git 分析统计（增加/删除/空行）
+npx ai-contribute --since 2026-01-01 -v
+
 # Generate detailed log files
 # 生成详细的日志文件
 npx ai-contribute --log

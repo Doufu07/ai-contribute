@@ -1,5 +1,6 @@
 import { execFileSync } from 'child_process';
 import { AISession, AITool, FileChange, VerificationMode } from '../types.js';
+import { isLineEmptyOrWhitespace } from '../utils/utils.js';
 
 export type RepoFileInfo = {
   totalLines: number;
@@ -486,21 +487,7 @@ export function normalizeLine(line: string): string {
   return res;
 }
 
-/**
- * Check if a line is empty or contains only whitespace
- * Optimized version using character traversal
- */
-export function isLineEmptyOrWhitespace(line: string): boolean {
-  if (!line || line.length === 0) return true;
-  
-  for (let i = 0; i < line.length; i++) {
-    const code = line.charCodeAt(i);
-    if (code !== 32 && code !== 9 && code !== 10 && code !== 13) {
-      return false;
-    }
-  }
-  return true;
-}
+
 
 /**
  * Get file creation time from git history

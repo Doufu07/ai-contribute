@@ -1,5 +1,5 @@
-import chalk from 'chalk'
 import { Command } from 'commander'
+import chalk from 'chalk'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
@@ -7,6 +7,8 @@ import { Worker, isMainThread, parentPort, workerData } from 'worker_threads'
 import { ContributionAnalyzer } from './analyzer.js'
 import { ConsoleReporter, JsonReporter, MarkdownReporter } from './reporter.js'
 import { AITool, ContributionStats, OutputFormat, VerificationMode } from './types.js'
+import { parseDate } from './utils/utils.js'
+import { printGitAnalysisResult, runGitAnalysis } from './utils/gitStat.js'
 
 // This is replaced at build time with the actual version
 const packageJson = { version: '1.0.0' };
@@ -364,42 +366,6 @@ function parseVerificationMode(mode: string | undefined): VerificationMode {
   process.exit(1);
 }
 
-/**
- * Parse date string into Date object
- */
-function parseDate(dateStr: string | undefined): Date | undefined {
-  if (!dateStr) return undefined;
-  
-  // Support YYYYMMDDHHMM format (12 digits)
-  if (/^\d{12}$/.test(dateStr)) {
-    const y = parseInt(dateStr.slice(0, 4), 10);
-    const m = parseInt(dateStr.slice(4, 6), 10) - 1;
-    const d = parseInt(dateStr.slice(6, 8), 10);
-    const h = parseInt(dateStr.slice(8, 10), 10);
-    const min = parseInt(dateStr.slice(10, 12), 10);
-    const dt = new Date(y, m, d, h, min);
-    // console.log(`[DEBUG] Parsed date: ${dateStr} -> ${dt.toISOString()}`);
-    return dt;
-  }
-  
-  // Support YYYYMMDD format
-  if (/^\d{8}$/.test(dateStr)) {
-    const y = parseInt(dateStr.slice(0, 4), 10);
-    const m = parseInt(dateStr.slice(4, 6), 10) - 1;
-    const d = parseInt(dateStr.slice(6, 8), 10);
-    return new Date(y, m, d);
-  }
-  
-  // Try standard date parsing
-   const date = new Date(dateStr);
-   if (isNaN(date.getTime())) {
-     console.error(chalk.red(`Error: Invalid date format '${dateStr}'. Use YYYYMMDD, YYYYMMDDHHMM, or YYYY-MM-DD.`));
-     process.exit(1);
-   }
-   // console.log('DEBUG: Parsed date:', date);
-   return date;
-}
-
 function manualParseSince(options: any) {
   if (options.since) return;
   const args = process.argv;
@@ -503,6 +469,41 @@ program
       }
       process.exit(1);
     }
+  });
+
+// Git Stat command
+program
+  .command('git-stat [path]')
+  .description('Show Git contribution statistics (replicates git.test.ts logic)')
+  .option('--since <date>', 'Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD)')
+  .option('-d, --directory <dir>', 'Only analyze files in specific directory')
+  .action(async (repoPath: string = '.', options) => {
+    // Check if repoPath is actually options
+    if (typeof repoPath === 'object' && repoPath !== null) {
+      options = repoPath;
+      repoPath = '.';
+    }
+    manualParseSince(options);
+
+    const resolvedPath = path.resolve(repoPath);
+    if (!fs.existsSync(resolvedPath)) {
+      console.error(chalk.red(`Error: Path '${repoPath}' does not exist.`));
+      process.exit(1);
+    }
+
+    if (!options.since) {
+      console.error(chalk.red('Error: --since <date> is required for git-stat command.'));
+      console.log(chalk.yellow('Example: npx ai-contribute git-stat --since 20260101'));
+      process.exit(1);
+    }
+
+    const sinceDate = parseDate(options.since);
+    if (!sinceDate) {
+       console.error(chalk.red('Error: Invalid date format.'));
+       process.exit(1);
+    }
+
+    runGitAnalysis(resolvedPath, sinceDate, options.directory);
   });
 
 // List command

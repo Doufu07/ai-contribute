@@ -20,7 +20,9 @@ export function isLineEmptyOrWhitespace(line: string): boolean {
  * Parse date string in various formats
  * Supports YYYYMMDDHHMM (12 digits), YYYYMMDD (8 digits), or standard Date string
  */
-export function parseDate(dateStr: string): Date {
+export function parseDate(dateStr: string | undefined): Date | undefined {
+  if (!dateStr) return undefined;
+  
   // Support YYYYMMDDHHMM format (12 digits)
   if (/^\d{12}$/.test(dateStr)) {
     const y = parseInt(dateStr.slice(0, 4), 10);

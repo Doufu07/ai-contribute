@@ -181,27 +181,27 @@ export class TraeScanner extends BaseScanner {
       // Find chain-start
       const chainStartTag = tags.find(t => t.startsWith('chain-start-'));
       
-      // Find end tag: prefer toolcall tags to capture AI output before potential user reversals
-      const toolCallTags = tags.filter(t => t.startsWith('toolcall-'));
-      const afterChatTags = tags.filter(t => t.startsWith('after-chat-turn-'));
+      // Get all files ever touched in this session's disk/content
+      const allFilesOutput = spawnSync('git', ['log', '--all', '--name-only', '--pretty=format:', '--', 'disk/content/*'], {
+        cwd: gitRepoPath,
+        encoding: 'utf8'
+      }).stdout;
       
-      let endTag: string | null = null;
-      if (toolCallTags.length > 0) {
-        endTag = toolCallTags[toolCallTags.length - 1];
-      } else if (afterChatTags.length > 0) {
-        endTag = afterChatTags[afterChatTags.length - 1];
-      }
+      const allFiles = Array.from(new Set(
+        (allFilesOutput || '').split('\n')
+          .map(f => f.trim())
+          .filter(f => f.startsWith('disk/content/'))
+      ));
 
-      if (!chainStartTag || !endTag) {
+      // Combine toolcall and after-chat tags in chronological order
+      const relevantTags = tags.filter(t => t.startsWith('toolcall-') || t.startsWith('after-chat-turn-'));
+      if (relevantTags.length === 0 || !chainStartTag) {
         return { changes, timestamp: sessionTimestamp };
       }
 
-      // DEBUG: Log tags for demo.html investigation
-      // console.log(`[DEBUG] Session ${sessionId}: Start=${chainStartTag}, End=${endTag}`);
-
-      // Get the session timestamp from the end tag
-      // This is more accurate than chain-start time, as Trae sessions can span multiple days
-      const tagDateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', endTag], {
+      // Get the session timestamp from the very last tag
+      const finalEndTag = relevantTags[relevantTags.length - 1];
+      const tagDateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', finalEndTag], {
         cwd: gitRepoPath,
         encoding: 'utf8'
       });
@@ -212,72 +212,86 @@ export class TraeScanner extends BaseScanner {
         }
       }
 
-      // Use git diff to get net changes between start and end of session
-      const diffOutput = spawnSync('git', ['diff', '--numstat', chainStartTag, endTag], {
-        cwd: gitRepoPath,
-        encoding: 'utf8'
-      }).stdout;
-
-      if (!diffOutput) {
-        return { changes, timestamp: sessionTimestamp };
-      }
-
-      const lines = diffOutput.split('\n');
-      for (const line of lines) {
-        const parts = line.split('\t');
-        if (parts.length < 3) continue;
-
-        const added = parseInt(parts[0], 10) || 0;
-        const removed = parseInt(parts[1], 10) || 0;
-        const filePath = parts[2];
-
-        let relativePath = filePath;
-        // console.log(`[DEBUG] Trae raw path: ${filePath}`);
-        if (filePath.startsWith('disk/content/')) {
-          relativePath = filePath.substring('disk/content/'.length);
-        } else if (filePath.startsWith('disk/')) {
-          const pathInsideDisk = filePath.substring(5);
-          if (pathInsideDisk.startsWith('Users/') || pathInsideDisk.includes(':')) {
-            const normalizedProject = projectPath.startsWith('/') ? projectPath.substring(1) : projectPath;
-            if (pathInsideDisk.includes(normalizedProject)) {
-              const index = pathInsideDisk.indexOf(normalizedProject);
-              if (index !== -1) {
-                relativePath = pathInsideDisk.substring(index + normalizedProject.length).replace(/^[/\\]/, '');
-              }
-            } else {
-              continue;
+      for (const filePath of allFiles) {
+        let lastTagWithFile: string | null = null;
+        // Traverse backwards to find the last tag where this file existed
+        for (let i = relevantTags.length - 1; i >= 0; i--) {
+            const tag = relevantTags[i];
+            const check = spawnSync('git', ['cat-file', '-e', `${tag}:${filePath}`], {
+                cwd: gitRepoPath,
+                stdio: 'ignore'
+            });
+            if (check.status === 0) {
+                lastTagWithFile = tag;
+                break;
             }
+        }
+
+        if (!lastTagWithFile) continue;
+
+        // Get the specific timestamp for this file's last change
+        let fileTimestamp = sessionTimestamp;
+        const fileTagDateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', lastTagWithFile], {
+          cwd: gitRepoPath,
+          encoding: 'utf8'
+        });
+        if (fileTagDateResult.stdout) {
+          const dateStr = fileTagDateResult.stdout.trim();
+          if (dateStr) {
+            fileTimestamp = new Date(dateStr);
+          }
+        }
+
+        // Use git diff to get net changes between start and the last tag containing the file
+        const diffOutput = spawnSync('git', ['diff', '--numstat', chainStartTag, lastTagWithFile, '--', filePath], {
+          cwd: gitRepoPath,
+          encoding: 'utf8'
+        }).stdout;
+
+        if (!diffOutput) continue;
+
+        const lines = diffOutput.trim().split('\n');
+        for (const line of lines) {
+          const parts = line.split('\t');
+          if (parts.length < 3) continue;
+
+          const added = parseInt(parts[0], 10) || 0;
+          const removed = parseInt(parts[1], 10) || 0;
+          
+          let relativePath = filePath;
+          if (filePath.startsWith('disk/content/')) {
+            relativePath = filePath.substring('disk/content/'.length);
           } else {
             continue;
           }
-        } else {
-          continue;
-        }
 
-        // Skip files with no changes
-        if (added === 0 && removed === 0) continue;
+          // Case-insensitive project path matching for Windows/Mac
+          const realProjectFiles = spawnSync('git', ['ls-files'], { cwd: projectPath, encoding: 'utf8' }).stdout.split('\n');
+          const matchedRealFile = realProjectFiles.find(f => f.toLowerCase() === relativePath.toLowerCase());
+          if (matchedRealFile) {
+            relativePath = matchedRealFile;
+          }
 
-        let addedLines: string[] = [];
-        let removedLines: string[] = [];
-        let realAdded = added;
-        let realRemoved = removed;
+          // Skip files with no changes
+          if (added === 0 && removed === 0) continue;
 
-        // Try to get more accurate diff by comparing base/ vs disk/ if available
-        if (filePath.startsWith('disk/')) {
+          let addedLines: string[] = [];
+          let removedLines: string[] = [];
+          let realAdded = added;
+          let realRemoved = removed;
+
+          // Try to get more accurate diff by comparing base/ vs disk/ if available
           const basePath = filePath.replace(/^disk\//, 'base/');
           
           // Check if base version exists in the end tag
           let hasBase = false;
           try {
-             const checkBase = spawnSync('git', ['cat-file', '-e', `${endTag}:${basePath}`], {
+             const checkBase = spawnSync('git', ['cat-file', '-e', `${lastTagWithFile}:${basePath}`], {
                cwd: gitRepoPath,
                stdio: 'ignore'
              });
              hasBase = checkBase.status === 0;
 
-             // If base exists in end tag, check if it existed in start tag.
-             // If it didn't exist in start tag, it was created during the session.
-             // In that case, we should treat it as a new file (full content contributed by AI).
              if (hasBase) {
                 const checkBaseStart = spawnSync('git', ['cat-file', '-e', `${chainStartTag}:${basePath}`], {
                    cwd: gitRepoPath,
@@ -293,8 +307,7 @@ export class TraeScanner extends BaseScanner {
 
           if (hasBase) {
             try {
-              // Diff base vs disk directly in the end tag
-              const numstat = spawnSync('git', ['diff', '--numstat', `${endTag}:${basePath}`, `${endTag}:${filePath}`], {
+              const numstat = spawnSync('git', ['diff', '--numstat', `${lastTagWithFile}:${basePath}`, `${lastTagWithFile}:${filePath}`], {
                 cwd: gitRepoPath,
                 encoding: 'utf8'
               });
@@ -304,59 +317,41 @@ export class TraeScanner extends BaseScanner {
                 if (parts.length >= 2) {
                   realAdded = parseInt(parts[0], 10) || 0;
                   realRemoved = parseInt(parts[1], 10) || 0;
-                  // console.log(`[DEBUG] Refined diff for ${relativePath}: +${realAdded} -${realRemoved}`);
                 }
               }
 
               if (realAdded > 0 || realRemoved > 0) {
-                const fileDiff = spawnSync('git', ['diff', '-U0', `${endTag}:${basePath}`, `${endTag}:${filePath}`], {
+                const fileDiff = spawnSync('git', ['diff', '-U0', `${lastTagWithFile}:${basePath}`, `${lastTagWithFile}:${filePath}`], {
                   cwd: gitRepoPath,
                   encoding: 'utf8'
                 }).stdout;
                 addedLines = this.extractAddedLinesFromDiff(fileDiff);
                 removedLines = this.extractRemovedLinesFromDiff(fileDiff);
               }
-            } catch (e) {
-              // console.log(`[DEBUG] Error refining diff: ${e}`);
-            }
+            } catch (e) {}
           } else if (added > 0) {
-            // New file (no base version), use original logic
              try {
-               const fileDiff = spawnSync('git', ['diff', '-U0', chainStartTag, endTag, '--', filePath], {
+               const fileDiff = spawnSync('git', ['diff', '-U0', chainStartTag, lastTagWithFile, '--', filePath], {
                  cwd: gitRepoPath,
                  encoding: 'utf8'
                }).stdout;
                addedLines = this.extractAddedLinesFromDiff(fileDiff);
                removedLines = this.extractRemovedLinesFromDiff(fileDiff);
-             } catch {
-               // Ignore errors
-             }
+             } catch {}
           }
-        } else if (added > 0 || removed > 0) {
-          try {
-            const fileDiff = spawnSync('git', ['diff', '-U0', chainStartTag, endTag, '--', filePath], {
-              cwd: gitRepoPath,
-              encoding: 'utf8'
-            }).stdout;
-            addedLines = this.extractAddedLinesFromDiff(fileDiff);
-            removedLines = this.extractRemovedLinesFromDiff(fileDiff);
-          } catch {
-            // Ignore errors extracting lines
-          }
-        }
 
-        changes.push({
-          filePath: relativePath,
-          linesAdded: realAdded,
-          linesRemoved: realRemoved,
-          changeType: realAdded > 0 && realRemoved === 0 ? 'create' : 'modify',
-          timestamp: sessionTimestamp,
-          tool: this.tool,
-          model,
-          addedLines: addedLines.length > 0 ? addedLines : undefined,
-          removedLinesContent: removedLines.length > 0 ? removedLines : undefined
-        });
-        // console.error(`[DEBUG] Trae found: ${relativePath} +${added} -${removed}`);
+          changes.push({
+            filePath: relativePath,
+            linesAdded: realAdded,
+            linesRemoved: realRemoved,
+            changeType: realAdded > 0 && realRemoved === 0 ? 'create' : 'modify',
+            timestamp: fileTimestamp,
+            tool: this.tool,
+            model,
+            addedLines: addedLines.length > 0 ? addedLines : undefined,
+            removedLinesContent: removedLines.length > 0 ? removedLines : undefined
+          });
+        }
       }
     } catch (e) {
       // console.error('Error analyzing git changes', e);

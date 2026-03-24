@@ -154,6 +154,23 @@ npx ai-contribute sessions [path] [-t TOOLS] [-d DIR] [--since DATE]
 #   --since <date>          Only show sessions since date (YYYYMMDD or YYYY-MM-DD)
 ```
 
+### Git Statistics / Git 统计
+
+Show Git contribution statistics for the repository (requires `--since` option).
+
+```bash
+npx ai-contribute git-stat [path] --since <date> [-d DIR]
+
+# Options:
+#   --since <date>          Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD) - Required
+#   -d, --directory <dir>   Only analyze files in specific directory
+
+# Examples / 示例:
+npx ai-contribute git-stat --since 20260101
+npx ai-contribute git-stat --since 2026-01-01
+npx ai-contribute git-stat /path/to/repo --since 20260101 -d src
+```
+
 ## Output Example / 输出示例
 
 ```

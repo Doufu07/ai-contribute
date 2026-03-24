@@ -182,6 +182,12 @@ export class TraeScanner extends BaseScanner {
       const chainStartTag = tags.find(t => t.startsWith('chain-start-'));
       
       // Get all files ever touched in this session's disk/content
+      // [修复说明] 为什么我们需要遍历所有文件而不是直接 diff chain-start 和最后一次 tag？
+      // 因为 Trae 的快照机制有一个特点：如果 AI 在长会话中期创建或修改了文件，但在会话结束前该文件被关闭或脱离了追踪，
+      // 那么在最后一次 tag 的快照里，这个文件可能会消失（相当于回到了 chain-start 的状态）。
+      // 导致如果只对比首尾 tag，这个文件的改动会被误判为 0。
+      // 因此，这里的逻辑改为：找出这个会话中曾出现过的所有文件，然后为【每个文件】单独找到它“最后一次实际存在的 tag 快照”，
+      // 用这个特定的最后一次 tag 与 chain-start 进行对比，从而找回所有真实的 AI 贡献。
       const allFilesOutput = spawnSync('git', ['log', '--all', '--name-only', '--pretty=format:', '--', 'disk/content/*'], {
         cwd: gitRepoPath,
         encoding: 'utf8'

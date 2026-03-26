@@ -69,6 +69,8 @@ npx ai-contribute --since 2026-01-01 -v
 # Generate detailed log files
 # 生成详细的日志文件
 npx ai-contribute --log
+# 查看git统计内容
+npm run dev -- git-stat --since 20260310    
 ```
 
 ## Commands / 命令

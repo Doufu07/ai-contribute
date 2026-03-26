@@ -176,7 +176,9 @@ export class GitAnalyzer {
             if (fs.existsSync(fullPath)) {
                 try {
                     const content = fs.readFileSync(fullPath, 'utf8');
-                    totalLinesOfChangedFiles += content.split('\n').length;
+                    const lines = content.split('\n');
+                    const nonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+                    totalLinesOfChangedFiles += nonEmptyLines;
                 } catch {
                     // Ignore read errors
                     // 忽略读取错误
@@ -243,7 +245,7 @@ export class GitAnalyzer {
             
             totalLinesAdded += nonEmptyLines;
             totalEmptyLinesAdded += emptyLines;
-            totalLinesOfChangedFiles += allLines.length;
+            totalLinesOfChangedFiles += nonEmptyLines;
             fileStats.set(filePath, { added: nonEmptyLines, removed: 0 });
             
             // For untracked files, the whole content is the diff
@@ -369,7 +371,7 @@ export class GitAnalyzer {
           totalLinesRemoved += gitStats.removed;
           totalEmptyLinesAdded += (gitStats.emptyAdded || 0);
           totalEmptyLinesRemoved += (gitStats.emptyRemoved || 0);
-          totalLinesOfChangedFiles += currentFileLines;
+          totalLinesOfChangedFiles += currentFileNonEmptyLines;
           verifiedActiveFiles.add(filePath);
           fileStats.set(filePath, { added: gitStats.added, removed: gitStats.removed });
         } else {
@@ -381,7 +383,7 @@ export class GitAnalyzer {
              // 未跟踪文件 => 假设整个文件都是新增的
              totalLinesAdded += currentFileNonEmptyLines;
              totalEmptyLinesAdded += (currentFileLines - currentFileNonEmptyLines);
-             totalLinesOfChangedFiles += currentFileLines;
+             totalLinesOfChangedFiles += currentFileNonEmptyLines;
              verifiedActiveFiles.add(filePath);
              fileStats.set(filePath, { added: currentFileNonEmptyLines, removed: 0 });
           }
@@ -461,9 +463,31 @@ export class GitAnalyzer {
     return files.filter(file => file.startsWith(prefix));
   }
 
+  /**
+   * Format Date to ISO string with local timezone offset
+   * This ensures Git interprets the time in the user's local timezone
+   * e.g., 2026-03-10T00:00:00+08:00 (Beijing time)
+   */
+  private formatLocalISO(date: Date): string {
+    const offset = date.getTimezoneOffset();
+    const offsetSign = offset <= 0 ? '+' : '-';
+    const offsetHours = Math.abs(Math.floor(offset / 60)).toString().padStart(2, '0');
+    const offsetMinutes = Math.abs(offset % 60).toString().padStart(2, '0');
+    const offsetStr = `${offsetSign}${offsetHours}:${offsetMinutes}`;
+
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    const seconds = date.getSeconds().toString().padStart(2, '0');
+
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${offsetStr}`;
+  }
+
   private getGitBaseCommit(since: Date): string | null {
     try {
-      const result = execFileSync('git', ['rev-list', '-1', '--before=' + since.toISOString(), 'HEAD'], {
+      const result = execFileSync('git', ['rev-list', '-1', '--before=' + this.formatLocalISO(since), 'HEAD'], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -638,7 +662,7 @@ export class GitAnalyzer {
 
       const gitLogOutput = execFileSync('git', [
         'log',
-        `--since=${since.toISOString()}`,
+        `--since=${this.formatLocalISO(since)}`,
         '--numstat',
         '--pretty=format:',
       ], {

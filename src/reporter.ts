@@ -100,18 +100,18 @@ export class ConsoleReporter {
     let rawFilesDisplay = raw.totalFiles.toString();
     let rawLinesDisplay = raw.linesAdded.toString();
     let rawDeletedDisplay = raw.linesRemoved.toString();
-    
+
     let shareFilesDenominator = stats.projectTotalFiles ?? stats.totalFiles;
     let shareLinesDenominator = stats.projectTotalLines ?? stats.totalLines;
 
     if (stats.projectChanges) {
       // Use project activity since time as "Original Data"
       rawFilesDisplay = stats.projectChanges.totalFiles.toString();
-      // User requested total lines of changed files
+      // Use total lines of changed files as "Original Data" (current file sizes)
       rawLinesDisplay = stats.projectChanges.totalLinesOfChangedFiles.toString();
 
       rawDeletedDisplay = stats.projectChanges.linesRemoved.toString();
-      
+
       // AI Contribution share is relative to total lines of changed files
       shareFilesDenominator = stats.projectChanges.totalFiles;
       shareLinesDenominator = stats.projectChanges.totalLinesOfChangedFiles;
@@ -170,11 +170,11 @@ export class ConsoleReporter {
     const contribDeletedDisplay = verifiedDeleted.toString();
 
     // Calculate Net Increment for Original Data
-    // Use Added lines instead of Net for display if using --since, as requested
+    // Use net lines (added - removed) for display
     let rawNetDisplay = '-';
     if (stats.projectChanges) {
-        const added = stats.projectChanges.linesAdded;
-        rawNetDisplay = chalk.green(`+${added}`);
+        const net = stats.projectChanges.netLinesAdded;
+        rawNetDisplay = net > 0 ? chalk.green(`+${net}`) : net < 0 ? chalk.red(`${net}`) : '0';
     } else {
         // Full scan: Net is Total
         rawNetDisplay = chalk.green(`+${stats.totalLines}`);

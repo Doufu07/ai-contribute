@@ -93,3 +93,4 @@ import { AISession } from '../types.js';
 ## Agent 运行日志 (Agent Run Log)
 
 - 2026-02-03 16:59:44 local: 成功运行 `pnpm dev` (tsc + `node dist/cli.js`)。检测到 Cursor 有 2 个会话；总体汇总显示 19 个文件，4501 行，14 个 AI 会话。
+https://mp.weixin.qq.com/s/8bmDf4GJH5zHjscW-_SX6g

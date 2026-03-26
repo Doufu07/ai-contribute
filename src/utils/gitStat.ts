@@ -69,12 +69,13 @@ export function printGitAnalysisResult(changes: {
   emptyLinesRemoved: number;
 }) {
   console.log('--- Git 分析结果 ---');
-  console.log(`变更文件总数: ${changes.totalFiles}`);
-  console.log(`新增代码行数: ${changes.linesAdded}`);
-  console.log(`删除代码行数: ${changes.linesRemoved}`);
-  console.log(`变更文件总行数: ${changes.totalLinesOfChangedFiles}`);
-  console.log(`新增空行数: ${changes.emptyLinesAdded}`);
-  console.log(`删除空行数: ${changes.emptyLinesRemoved}`);
+  console.log(`变更文件数: ${changes.totalFiles}`);
+  console.log(`净增代码行: ${changes.netLinesAdded}  (=${changes.linesAdded}-${changes.linesRemoved})`);
+  console.log(`新增代码行: ${changes.linesAdded}`);
+  console.log(`删除代码行: ${changes.linesRemoved}`);
+  console.log(`变更文件非空代码行: ${changes.totalLinesOfChangedFiles}`);
+  console.log(`空行新增: ${changes.emptyLinesAdded}`);
+  console.log(`空行删除: ${changes.emptyLinesRemoved}`);
   
   console.log('\n变更文件列表:');
   changes.files.forEach(f => {

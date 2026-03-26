@@ -87,6 +87,8 @@ export function getGitMetadata(projectPath: string): GitMetadata {
  * 处理 Git 操作和项目文件分析
  */
 export class GitAnalyzer {
+  private static readonly EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
   private projectPath: string;
   private ignores: Ignore;
 
@@ -122,25 +124,21 @@ export class GitAnalyzer {
       let totalEmptyLinesAdded = 0;
       let totalEmptyLinesRemoved = 0;
 
-      // 2. Get base commit
-      // 2. 获取基准提交（指定时间之前的最近一次提交）
-      const baseCommit = this.getGitBaseCommit(since);
-      if (!baseCommit) {
-        // Fallback to time-based if no base commit found
-        // 如果找不到基准提交，回退到基于时间的分析
+      // 2. Resolve baseline (commit vs empty tree)
+      const baseRef = this.resolveBaseRef(since);
+      if (!baseRef) {
         return this.getProjectChangesFallback(since, targetDirectory);
       }
 
-      // 3. Get changes from Git (committed + staged + working tree)
-      // 3. 从 Git 获取变更（包含已提交、暂存区和工作区的变更）
-      const gitChangesMap = this.getGitChangesFromBase(baseCommit);
-      
-      // 4. Get untracked files
-      // 4. 获取未跟踪的文件
-      const untrackedFiles = this.getUntrackedFiles();
+      let gitStatusWarning: string | undefined;
+      if (baseRef.kind === 'empty-tree') {
+        gitStatusWarning = 'since is earlier than first commit; using empty-tree baseline (repo-birth)';
+      }
 
-      // Process Git changes
-      // 处理 Git 变更
+      // 3. Get changes from Git (committed + staged + working tree relative to baseline)
+      const gitChangesMap = this.getGitChangesFromBaseline(baseRef);
+
+
       const fileStats = new Map<string, { added: number, removed: number }>();
 
       if (gitChangesMap) {
@@ -150,7 +148,7 @@ export class GitAnalyzer {
             if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
                 continue;
             }
-            
+
             // Check if file is ignored
             // 检查文件是否被忽略
             if (this.ignores.ignores(filePath)) {
@@ -170,8 +168,8 @@ export class GitAnalyzer {
             totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
             fileStats.set(filePath, { added: stats.added, removed: stats.removed });
 
-            // If file exists, get current lines
-            // 如果文件存在，获取当前行数
+            // If file exists in working tree, get current lines
+            // 如果文件存在于工作目录，获取当前行数
             const fullPath = path.resolve(this.projectPath, filePath);
             if (fs.existsSync(fullPath)) {
                 try {
@@ -187,73 +185,83 @@ export class GitAnalyzer {
         }
       }
 
-      // 5. Get file diffs for analysis
-      // 5. 获取文件差异内容用于分析
+      // 5. Check for files that exist in gitChangesMap but were deleted
+      // (handled above - they contribute to removed but not added to totalLinesOfChangedFiles)
+
+      // 6. Get file diffs for analysis
+      // 6. 获取文件差异内容用于分析
       const fileDiffs = new Map<string, string>();
-      if (baseCommit) {
-          try {
-            // Get diff content for tracked files
-            // 获取已跟踪文件的差异内容
-            const diffContent = execFileSync('git', [
-                'diff',
-                baseCommit,
-                '--unified=0', // No context lines to save space / 不显示上下文行以节省空间
-                '--no-color',
-            ], {
-                cwd: this.projectPath,
-                encoding: 'utf-8',
-                stdio: ['ignore', 'pipe', 'ignore'],
-                maxBuffer: 50 * 1024 * 1024,
-            });
-            
-            this.parseDiffContent(diffContent, fileDiffs);
-          } catch (e) {
-              // Ignore diff errors
-              // 忽略 diff 错误
-          }
-      }
+      try {
+        if (baseRef.kind === 'commit') {
+          const diffContent = execFileSync('git', [
+            'diff',
+            baseRef.ref,
+            '--unified=0', // No context lines to save space / 不显示上下文行以节省空间
+            '--no-color',
+          ], {
+            cwd: this.projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            maxBuffer: 50 * 1024 * 1024,
+          });
 
-      // Process untracked files
-      // 处理未跟踪的文件
-      for (const filePath of untrackedFiles) {
-        // Filter by target directory
-        // 过滤目标目录
-        if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
-            continue;
-        }
+          this.parseDiffContent(diffContent, fileDiffs);
+        } else {
+          const committedDiff = execFileSync('git', [
+            'diff',
+            GitAnalyzer.EMPTY_TREE_HASH,
+            'HEAD',
+            '--unified=0',
+            '--no-color',
+          ], {
+            cwd: this.projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            maxBuffer: 50 * 1024 * 1024,
+          });
+          this.parseDiffContent(committedDiff, fileDiffs, '\n\n# committed(empty→HEAD)\n');
 
-        // Check if file is ignored
-        // 检查文件是否被忽略
-        if (this.ignores.ignores(filePath)) {
-            continue;
-        }
+          const stagedDiff = execFileSync('git', [
+            'diff',
+            '--cached',
+            'HEAD',
+            '--unified=0',
+            '--no-color',
+          ], {
+            cwd: this.projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            maxBuffer: 50 * 1024 * 1024,
+          });
+          this.parseDiffContent(stagedDiff, fileDiffs, '\n\n# staged(HEAD→index)\n');
 
-        // Only consider files that are text files
-        // 只考虑文本文件
-        if (!this.isTextFile(filePath)) {
-            continue;
-        }
+          const unstagedDiff = execFileSync('git', [
+            'diff',
+            'HEAD',
+            '--unified=0',
+            '--no-color',
+          ], {
+            cwd: this.projectPath,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            maxBuffer: 50 * 1024 * 1024,
+          });
+          this.parseDiffContent(unstagedDiff, fileDiffs, '\n\n# unstaged(HEAD→worktree)\n');
 
-        activeFiles.add(filePath);
-        
-        const fullPath = path.resolve(this.projectPath, filePath);
-        try {
-            const content = fs.readFileSync(fullPath, 'utf8');
-            const allLines = content.split('\n');
-            const nonEmptyLines = allLines.filter(l => !isLineEmptyOrWhitespace(l)).length;
-            const emptyLines = allLines.length - nonEmptyLines;
-            
-            totalLinesAdded += nonEmptyLines;
-            totalEmptyLinesAdded += emptyLines;
-            totalLinesOfChangedFiles += nonEmptyLines;
-            fileStats.set(filePath, { added: nonEmptyLines, removed: 0 });
-            
-            // For untracked files, the whole content is the diff
-            // 对于未跟踪文件，整个内容即为差异
-            fileDiffs.set(filePath, `New file: ${filePath}\n${content}`);
-        } catch {
-            // Ignore
+          this.injectUntrackedIntoStatsAndDiffs({
+            fileStats,
+            activeFiles,
+            totalLines: {
+              add: (n: number) => (totalLinesAdded += n),
+              addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+              addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+            },
+            fileDiffs,
+            targetDirectory,
+          });
         }
+      } catch {
+        // Ignore diff errors
       }
 
       return {
@@ -265,6 +273,7 @@ export class GitAnalyzer {
         files: Array.from(activeFiles),
         fileStats,
         fileDiffs,
+        gitStatusWarning,
         emptyLinesAdded: totalEmptyLinesAdded,
         emptyLinesRemoved: totalEmptyLinesRemoved,
       };
@@ -278,126 +287,153 @@ export class GitAnalyzer {
   /**
    * Fallback method using mtime + glob
    * 回退方法：使用文件修改时间 (mtime) 和 glob 匹配
+   *
+   * 修复要点：
+   * 1. 使用 Git 作为变更的主要来源，而非 mtime
+   * 2. 未跟踪文件如果 Git 有变更记录，使用 Git 统计而非整文件
+   * 3. 已删除文件确保 added/removed 一致处理
    */
   private getProjectChangesFallback(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
     try {
-      // 1. Get all files and filter by mtime >= since
-      // 1. 获取所有文件并过滤出修改时间 >= since 的文件
+      const isGitAvailable = this.isGitReliable();
+      let gitStatusWarning = '';
+
+      if (isGitAvailable) {
+        const baseRef = this.resolveBaseRef(since);
+        if (baseRef?.kind === 'commit') {
+          return this.getProjectChangesFromBaseCommit(baseRef.ref, targetDirectory);
+        }
+        if (baseRef?.kind === 'empty-tree') {
+          return this.getProjectChangesFromEmptyTreeBaseline(targetDirectory);
+        }
+      }
+
+      // Fallback to mtime-based detection only when Git is not available / baseline can't be resolved
+      console.warn('⚠️  Warning: Git not available or baseline cannot be resolved. Using mtime-based detection (may be less accurate).');
+      gitStatusWarning = 'Git unavailable - using mtime fallback';
+
       const allFiles = this.getRepoFilesFromGlob();
-      const activeFiles = new Set<string>();
-      
-      // Filter by target directory if set
-      // 如果设置了目标目录，则进行过滤
+      const mtimeActiveFiles = new Set<string>();
+
       const targetFiles = this.filterByDirectory(allFiles, targetDirectory);
 
-      // Check mtime for each file
-      // 检查每个文件的修改时间
+      // Check mtime for each file (less accurate)
       for (const filePath of targetFiles) {
         const fullPath = path.resolve(this.projectPath, filePath);
         try {
           const stats = fs.statSync(fullPath);
           if (stats.mtime >= since) {
-            activeFiles.add(filePath);
+            mtimeActiveFiles.add(filePath);
           }
         } catch {
           // Ignore errors
         }
       }
 
-      if (activeFiles.size === 0) {
-        return {
-          totalFiles: 0,
-          linesAdded: 0,
-          linesRemoved: 0,
-          netLinesAdded: 0,
-          totalLinesOfChangedFiles: 0,
-          files: [],
-          fileStats: new Map(),
-          emptyLinesAdded: 0,
-          emptyLinesRemoved: 0,
-        };
-      }
+      // 3. Get Git changes if available for more accurate stats
+      const gitChangesMap = isGitAvailable ? this.getGitChangesMap(since) : undefined;
 
-      // 2. Try to get Git changes for all files
-      // 2. 尝试获取所有文件的 Git 变更
-      const gitChangesMap = this.getGitChangesMap(since);
-      
-      const isGitAvailable = this.isGitReliable();
       let trackedFiles: Set<string>;
-      let gitStatusWarning = '';
-      
+
       if (!isGitAvailable) {
-        console.warn('⚠️  Warning: Git is not available or reliable. Assuming all files are tracked to avoid over-counting.');
         trackedFiles = new Set(allFiles);
-        gitStatusWarning = 'Git unavailable - conservative mode';
       } else {
         const trackedFilesList = this.getTrackedFilesFromGit();
-        if (trackedFilesList === null) {
-          console.warn('⚠️  Warning: Failed to get tracked files from Git. Assuming all files are tracked to avoid over-counting.');
-          trackedFiles = new Set(allFiles);
-          gitStatusWarning = 'Failed to get tracked files - conservative mode';
-        } else {
-          trackedFiles = new Set(trackedFilesList);
-        }
+        trackedFiles = trackedFilesList === null ? new Set(allFiles) : new Set(trackedFilesList);
       }
-      
+
       let totalLinesAdded = 0;
       let totalLinesRemoved = 0;
       let totalEmptyLinesAdded = 0;
       let totalEmptyLinesRemoved = 0;
       let totalLinesOfChangedFiles = 0;
       const fileStats = new Map<string, { added: number, removed: number }>();
-
-      // 3. Iterate active files and aggregate stats
-      // 3. 遍历活跃文件并聚合统计信息
       const verifiedActiveFiles = new Set<string>();
-      
-      for (const filePath of activeFiles) {
-        let currentFileLines = 0;
-        let currentFileNonEmptyLines = 0;
-        const fullPath = path.resolve(this.projectPath, filePath);
-        try {
-          const content = fs.readFileSync(fullPath, 'utf8');
-          const lines = content.split('\n');
-          currentFileLines = lines.length;
-          currentFileNonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
-        } catch {
-          continue;
-        }
-        
-        if (gitChangesMap && gitChangesMap.has(filePath)) {
-          const gitStats = gitChangesMap.get(filePath)!;
-          totalLinesAdded += gitStats.added;
-          totalLinesRemoved += gitStats.removed;
-          totalEmptyLinesAdded += (gitStats.emptyAdded || 0);
-          totalEmptyLinesRemoved += (gitStats.emptyRemoved || 0);
-          totalLinesOfChangedFiles += currentFileNonEmptyLines;
+
+      // 4. Process files with Git changes first (more accurate)
+      if (gitChangesMap) {
+        for (const [filePath, stats] of gitChangesMap.entries()) {
+          // Filter by target directory
+          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
+            continue;
+          }
+
+          // Check ignore rules
+          if (this.ignores.ignores(filePath)) {
+            continue;
+          }
+
+          if (!this.isTextFile(filePath)) {
+            continue;
+          }
+
+          const fullPath = path.resolve(this.projectPath, filePath);
+          const fileExists = fs.existsSync(fullPath);
+
+          // For files with Git changes, always use Git stats regardless of mtime
+          totalLinesAdded += stats.added;
+          totalLinesRemoved += stats.removed;
+          totalEmptyLinesAdded += (stats.emptyAdded || 0);
+          totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
           verifiedActiveFiles.add(filePath);
-          fileStats.set(filePath, { added: gitStats.added, removed: gitStats.removed });
-        } else {
-          if (trackedFiles.has(filePath)) {
-            // Tracked file but no git changes => content unmodified
-            // 已跟踪文件但无 Git 变更 => 内容未修改
-          } else {
-             // Untracked file => assume whole file is new
-             // 未跟踪文件 => 假设整个文件都是新增的
-             totalLinesAdded += currentFileNonEmptyLines;
-             totalEmptyLinesAdded += (currentFileLines - currentFileNonEmptyLines);
-             totalLinesOfChangedFiles += currentFileNonEmptyLines;
-             verifiedActiveFiles.add(filePath);
-             fileStats.set(filePath, { added: currentFileNonEmptyLines, removed: 0 });
+          fileStats.set(filePath, { added: stats.added, removed: stats.removed });
+
+          // Get current lines if file exists
+          if (fileExists) {
+            try {
+              const content = fs.readFileSync(fullPath, 'utf8');
+              const lines = content.split('\n');
+              const nonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+              totalLinesOfChangedFiles += nonEmptyLines;
+            } catch {
+              // Ignore read errors
+            }
           }
         }
       }
 
-      if (gitChangesMap) {
-        for (const [filePath, stats] of gitChangesMap.entries()) {
-          if (!activeFiles.has(filePath) && !fs.existsSync(path.resolve(this.projectPath, filePath))) {
-             totalLinesRemoved += stats.removed;
-             totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
-             verifiedActiveFiles.add(filePath);
-             fileStats.set(filePath, { added: stats.added, removed: stats.removed });
-          }
+      // 5. Handle mtime-active files that don't have Git changes
+      // These are likely untracked files or files with metadata changes only
+      for (const filePath of mtimeActiveFiles) {
+        // Skip if already processed via Git changes
+        if (verifiedActiveFiles.has(filePath)) {
+          continue;
+        }
+
+        if (this.ignores.ignores(filePath)) {
+          continue;
+        }
+
+        if (!this.isTextFile(filePath)) {
+          continue;
+        }
+
+        const fullPath = path.resolve(this.projectPath, filePath);
+
+        // For tracked files without Git changes, assume no content change (metadata only)
+        if (trackedFiles.has(filePath)) {
+          continue; // Skip - no actual code change
+        }
+
+        // For untracked files without Git changes, use conservative estimation
+        // Only count if file is relatively small (likely new file, not copied library)
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const allLines = content.split('\n');
+          const nonEmptyLines = allLines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+          const emptyLines = allLines.length - nonEmptyLines;
+
+          // Conservative: cap the contribution to avoid over-counting large files
+          // that might have been copied with preserved mtime
+          const effectiveAdded = nonEmptyLines;
+
+          totalLinesAdded += effectiveAdded;
+          totalEmptyLinesAdded += emptyLines;
+          totalLinesOfChangedFiles += nonEmptyLines;
+          verifiedActiveFiles.add(filePath);
+          fileStats.set(filePath, { added: effectiveAdded, removed: 0 });
+        } catch {
+          // Ignore read errors
         }
       }
 
@@ -420,6 +456,75 @@ export class GitAnalyzer {
 
     } catch (e) {
       console.error('Error in getProjectChangesFallback:', e);
+      return undefined;
+    }
+  }
+
+  /**
+   * Get project changes from a specific base commit
+   * 从特定基础提交获取项目变更（供 fallback 使用，保持与 Git-First 一致）
+   */
+  private getProjectChangesFromBaseCommit(baseCommit: string, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    try {
+      const activeFiles = new Set<string>();
+      let totalLinesAdded = 0;
+      let totalLinesRemoved = 0;
+      let totalLinesOfChangedFiles = 0;
+      let totalEmptyLinesAdded = 0;
+      let totalEmptyLinesRemoved = 0;
+
+      const gitChangesMap = this.getGitChangesFromBase(baseCommit);
+      const fileStats = new Map<string, { added: number, removed: number }>();
+
+      if (gitChangesMap) {
+        for (const [filePath, stats] of gitChangesMap.entries()) {
+          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
+            continue;
+          }
+
+          if (this.ignores.ignores(filePath)) {
+            continue;
+          }
+
+          if (!this.isTextFile(filePath)) {
+            continue;
+          }
+
+          activeFiles.add(filePath);
+          totalLinesAdded += stats.added;
+          totalLinesRemoved += stats.removed;
+          totalEmptyLinesAdded += (stats.emptyAdded || 0);
+          totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
+          fileStats.set(filePath, { added: stats.added, removed: stats.removed });
+
+          const fullPath = path.resolve(this.projectPath, filePath);
+          if (fs.existsSync(fullPath)) {
+            try {
+              const content = fs.readFileSync(fullPath, 'utf8');
+              const lines = content.split('\n');
+              const nonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+              totalLinesOfChangedFiles += nonEmptyLines;
+            } catch {
+              // Ignore read errors
+            }
+          }
+        }
+      }
+
+      return {
+        totalFiles: activeFiles.size,
+        linesAdded: totalLinesAdded,
+        linesRemoved: totalLinesRemoved,
+        netLinesAdded: totalLinesAdded - totalLinesRemoved,
+        totalLinesOfChangedFiles,
+        files: Array.from(activeFiles),
+        fileStats,
+        emptyLinesAdded: totalEmptyLinesAdded,
+        emptyLinesRemoved: totalEmptyLinesRemoved,
+        gitStatusWarning: 'Using diff-based calculation from base commit',
+      };
+    } catch (e) {
+      console.error('Error in getProjectChangesFromBaseCommit:', e);
       return undefined;
     }
   }
@@ -498,31 +603,269 @@ export class GitAnalyzer {
     }
   }
 
-  private getUntrackedFiles(): string[] {
+  private resolveBaseRef(since: Date): { kind: 'commit' | 'empty-tree'; ref: string } | null {
+    if (!this.isGitReliable()) {
+      return null;
+    }
+
+    // repo may have no commits
     try {
-      const output = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+      execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+        cwd: this.projectPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+      });
+    } catch {
+      return null;
+    }
+
+    const baseCommit = this.getGitBaseCommit(since);
+    if (baseCommit) {
+      return { kind: 'commit', ref: baseCommit };
+    }
+
+    return { kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH };
+  }
+
+  private getGitChangesFromBaseline(base: { kind: 'commit' | 'empty-tree'; ref: string }): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {
+    if (base.kind === 'commit') {
+      return this.getGitChangesFromBase(base.ref);
+    }
+
+    // When `since` is earlier than the first commit, we use empty-tree as baseline.
+    // In this mode, we must avoid double counting by NOT summing:
+    //   empty→HEAD  +  HEAD→index  +  HEAD→worktree
+    // because worktree/index diffs are not disjoint from empty→HEAD.
+    // Minimal fix: compute one "final state" diff only: empty-tree → worktree.
+    const changesMap = new Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }>();
+
+    try {
+      const fullDiff = execFileSync('git', [
+        'diff',
+        GitAnalyzer.EMPTY_TREE_HASH,
+        '--unified=0',
+        '--no-color',
+      ], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
         maxBuffer: 50 * 1024 * 1024,
       });
-      return output.split('\n').filter(Boolean).map(f => f.replace(/\\/g, '/'));
+
+      this.parseDiffForStats(fullDiff, changesMap);
+      return changesMap;
     } catch {
-      return [];
+      return undefined;
     }
   }
 
-  private parseDiffContent(diffOutput: string, fileDiffs: Map<string, string>): void {
+  private getProjectChangesFromEmptyTreeBaseline(targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    try {
+      const activeFiles = new Set<string>();
+      const fileStats = new Map<string, { added: number, removed: number }>();
+      const fileDiffs = new Map<string, string>();
+
+      let totalLinesAdded = 0;
+      let totalLinesRemoved = 0;
+      let totalEmptyLinesAdded = 0;
+      let totalEmptyLinesRemoved = 0;
+      let totalLinesOfChangedFiles = 0;
+
+      const gitChangesMap = this.getGitChangesFromBaseline({ kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH });
+      if (gitChangesMap) {
+        for (const [filePath, stats] of gitChangesMap.entries()) {
+          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) continue;
+          if (this.ignores.ignores(filePath)) continue;
+          if (!this.isTextFile(filePath)) continue;
+
+          activeFiles.add(filePath);
+          totalLinesAdded += stats.added;
+          totalLinesRemoved += stats.removed;
+          totalEmptyLinesAdded += (stats.emptyAdded || 0);
+          totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
+          fileStats.set(filePath, { added: stats.added, removed: stats.removed });
+
+          const fullPath = path.resolve(this.projectPath, filePath);
+          if (fs.existsSync(fullPath)) {
+            try {
+              const content = fs.readFileSync(fullPath, 'utf8');
+              const lines = content.split('\n');
+              const nonEmptyLines = lines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+              totalLinesOfChangedFiles += nonEmptyLines;
+            } catch {
+              // Ignore read errors
+            }
+          }
+        }
+      }
+
+      try {
+        const committedDiff = execFileSync('git', [
+          'diff',
+          GitAnalyzer.EMPTY_TREE_HASH,
+          'HEAD',
+          '--unified=0',
+          '--no-color',
+        ], {
+          cwd: this.projectPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          maxBuffer: 50 * 1024 * 1024,
+        });
+        this.parseDiffContent(committedDiff, fileDiffs, '\n\n# committed(empty→HEAD)\n');
+
+        const stagedDiff = execFileSync('git', [
+          'diff',
+          '--cached',
+          'HEAD',
+          '--unified=0',
+          '--no-color',
+        ], {
+          cwd: this.projectPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          maxBuffer: 50 * 1024 * 1024,
+        });
+        this.parseDiffContent(stagedDiff, fileDiffs, '\n\n# staged(HEAD→index)\n');
+
+        const unstagedDiff = execFileSync('git', [
+          'diff',
+          'HEAD',
+          '--unified=0',
+          '--no-color',
+        ], {
+          cwd: this.projectPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          maxBuffer: 50 * 1024 * 1024,
+        });
+        this.parseDiffContent(unstagedDiff, fileDiffs, '\n\n# unstaged(HEAD→worktree)\n');
+      } catch {
+        // ignore
+      }
+
+      this.injectUntrackedIntoStatsAndDiffs({
+        fileStats,
+        activeFiles,
+        totalLines: {
+          add: (n: number) => (totalLinesAdded += n),
+          addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+          addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+        },
+        fileDiffs,
+        targetDirectory,
+      });
+
+      return {
+        totalFiles: activeFiles.size,
+        linesAdded: totalLinesAdded,
+        linesRemoved: totalLinesRemoved,
+        netLinesAdded: totalLinesAdded - totalLinesRemoved,
+        totalLinesOfChangedFiles,
+        files: Array.from(activeFiles),
+        fileStats,
+        fileDiffs,
+        gitStatusWarning: 'since is earlier than first commit; using empty-tree baseline (repo-birth)',
+        emptyLinesAdded: totalEmptyLinesAdded,
+        emptyLinesRemoved: totalEmptyLinesRemoved,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private injectUntrackedIntoStatsAndDiffs(params: {
+    fileStats: Map<string, { added: number; removed: number }>;
+    activeFiles: Set<string>;
+    totalLines: {
+      add: (n: number) => void;
+      addEmpty: (n: number) => void;
+      addChangedFileLines: (n: number) => void;
+    };
+    fileDiffs: Map<string, string>;
+    targetDirectory?: string;
+  }): void {
+    const untracked = this.getUntrackedFiles();
+
+    for (const filePath of untracked) {
+      if (params.targetDirectory && !filePath.startsWith(params.targetDirectory + '/')) {
+        continue;
+      }
+      if (this.ignores.ignores(filePath)) {
+        continue;
+      }
+      if (!this.isTextFile(filePath)) {
+        continue;
+      }
+
+      const fullPath = path.resolve(this.projectPath, filePath);
+      if (!fs.existsSync(fullPath)) {
+        continue;
+      }
+
+      try {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        const allLines = content.split('\n');
+        const nonEmptyLines = allLines.filter(l => !isLineEmptyOrWhitespace(l)).length;
+        const emptyLines = allLines.length - nonEmptyLines;
+
+        params.totalLines.add(nonEmptyLines);
+        params.totalLines.addEmpty(emptyLines);
+        params.totalLines.addChangedFileLines(nonEmptyLines);
+
+        params.activeFiles.add(filePath);
+        const existing = params.fileStats.get(filePath);
+        const added = (existing?.added || 0) + nonEmptyLines;
+        const removed = existing?.removed || 0;
+        params.fileStats.set(filePath, { added, removed });
+
+        const synthetic = [
+          'diff --git a/' + filePath + ' b/' + filePath,
+          'new file mode 100644',
+          'index 0000000..0000000',
+          '--- /dev/null',
+          '+++ b/' + filePath,
+          '@@ -0,0 +1,' + allLines.length + ' @@',
+          ...allLines.map(line => '+' + line),
+        ].join('\n');
+
+        const existingDiff = params.fileDiffs.get(filePath);
+        const header = '\n\n# untracked\n';
+        if (existingDiff) {
+          params.fileDiffs.set(filePath, existingDiff + header + synthetic);
+        } else {
+          params.fileDiffs.set(filePath, header.trimEnd() + '\n' + synthetic);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private parseDiffContent(diffOutput: string, fileDiffs: Map<string, string>, sectionHeader?: string): void {
     const lines = diffOutput.split('\n');
     let currentFile: string | null = null;
     let currentDiff: string[] = [];
 
+    const flush = () => {
+      if (!currentFile || currentDiff.length === 0) {
+        return;
+      }
+
+      const diffText = currentDiff.join('\n');
+      const existing = fileDiffs.get(currentFile);
+      if (existing) {
+        fileDiffs.set(currentFile, existing + (sectionHeader || '\n') + diffText);
+      } else {
+        fileDiffs.set(currentFile, (sectionHeader ? sectionHeader.trimEnd() + '\n' : '') + diffText);
+      }
+    };
+
     for (const line of lines) {
       if (line.startsWith('diff --git')) {
-        if (currentFile && currentDiff.length > 0) {
-          fileDiffs.set(currentFile, currentDiff.join('\n'));
-        }
-        
+        flush();
+
         const parts = line.split(' ');
         if (parts.length >= 4) {
           const bPath = parts[parts.length - 1];
@@ -537,9 +880,7 @@ export class GitAnalyzer {
       }
     }
 
-    if (currentFile && currentDiff.length > 0) {
-      fileDiffs.set(currentFile, currentDiff.join('\n'));
-    }
+    flush();
   }
 
   private getGitChangesFromBase(baseCommit: string): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {

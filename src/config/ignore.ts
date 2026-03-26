@@ -4,6 +4,7 @@
  */
 export const DEFAULT_IGNORES = [
   '.git',
+  '.gitignore',
   'node_modules',
   'dist',
   'build',

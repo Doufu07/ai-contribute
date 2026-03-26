@@ -8,7 +8,7 @@ dist/
 package-lock.json
 logs/
 *.log
-docs/
+docs/*
 tests/
 tests/
 exports/

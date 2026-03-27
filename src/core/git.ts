@@ -810,15 +810,20 @@ export class GitAnalyzer {
         const nonEmptyLines = allLines.filter(l => !isLineEmptyOrWhitespace(l)).length;
         const emptyLines = allLines.length - nonEmptyLines;
 
-        params.totalLines.add(nonEmptyLines);
-        params.totalLines.addEmpty(emptyLines);
-        params.totalLines.addChangedFileLines(nonEmptyLines);
+        // Avoid double counting:
+        // In empty-tree baseline mode, `git diff <EMPTY_TREE_HASH>` may already include untracked files
+        // as "new files" (depending on git version/config). If this file already has stats, we only
+        // append the "# untracked" synthetic diff for readability and skip totals accumulation.
+        const alreadyCounted = params.fileStats.has(filePath);
 
-        params.activeFiles.add(filePath);
-        const existing = params.fileStats.get(filePath);
-        const added = (existing?.added || 0) + nonEmptyLines;
-        const removed = existing?.removed || 0;
-        params.fileStats.set(filePath, { added, removed });
+        if (!alreadyCounted) {
+          params.totalLines.add(nonEmptyLines);
+          params.totalLines.addEmpty(emptyLines);
+          params.totalLines.addChangedFileLines(nonEmptyLines);
+
+          params.activeFiles.add(filePath);
+          params.fileStats.set(filePath, { added: nonEmptyLines, removed: 0 });
+        }
 
         const synthetic = [
           'diff --git a/' + filePath + ' b/' + filePath,

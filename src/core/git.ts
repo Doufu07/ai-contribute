@@ -4,6 +4,7 @@ import { execFileSync } from 'child_process';
 import { glob } from 'glob';
 import ignore, { type Ignore } from 'ignore';
 import { isLineEmptyOrWhitespace } from '../utils/utils.js';
+import { formatCSTISO, getGitEnv, TZ_CST } from '../utils/time.js';
 
 export interface GitMetadata {
   branch?: string;
@@ -568,34 +569,13 @@ export class GitAnalyzer {
     return files.filter(file => file.startsWith(prefix));
   }
 
-  /**
-   * Format Date to ISO string with local timezone offset
-   * This ensures Git interprets the time in the user's local timezone
-   * e.g., 2026-03-10T00:00:00+08:00 (Beijing time)
-   */
-  private formatLocalISO(date: Date): string {
-    const offset = date.getTimezoneOffset();
-    const offsetSign = offset <= 0 ? '+' : '-';
-    const offsetHours = Math.abs(Math.floor(offset / 60)).toString().padStart(2, '0');
-    const offsetMinutes = Math.abs(offset % 60).toString().padStart(2, '0');
-    const offsetStr = `${offsetSign}${offsetHours}:${offsetMinutes}`;
-
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    const seconds = date.getSeconds().toString().padStart(2, '0');
-
-    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${offsetStr}`;
-  }
-
   private getGitBaseCommit(since: Date): string | null {
     try {
-      const result = execFileSync('git', ['rev-list', '-1', '--before=' + this.formatLocalISO(since), 'HEAD'], {
+      const result = execFileSync('git', ['rev-list', '-1', '--before=' + formatCSTISO(since), 'HEAD'], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: getGitEnv(),
       }).trim();
       return result.length > 0 ? result : null;
     } catch {
@@ -1008,13 +988,14 @@ export class GitAnalyzer {
 
       const gitLogOutput = execFileSync('git', [
         'log',
-        `--since=${this.formatLocalISO(since)}`,
+        `--since=${formatCSTISO(since)}`,
         '--numstat',
         '--pretty=format:',
       ], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: getGitEnv(),
       });
       updateMap(gitLogOutput);
 
@@ -1022,6 +1003,7 @@ export class GitAnalyzer {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: getGitEnv(),
       });
       updateMap(stagedOutput);
 
@@ -1029,6 +1011,7 @@ export class GitAnalyzer {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: getGitEnv(),
       });
       updateMap(unstagedOutput);
 

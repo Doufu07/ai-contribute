@@ -1,16 +1,16 @@
-
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import ignore from 'ignore';
 import { GitAnalyzer } from '../core/git.js';
 import { DEFAULT_IGNORES } from '../config/ignore.js';
+import { formatCSTDisplay } from './time.js';
 
 /**
  * Execute Git analysis logic
  */
 export function runGitAnalysis(resolvedPath: string, sinceDate: Date, directory?: string) {
-    console.log(chalk.blue(`正在分析 ${resolvedPath} 中自 ${sinceDate.toISOString()} 以来的 Git 变更...`));
+    console.log(chalk.blue(`正在分析 ${resolvedPath} 中自 ${formatCSTDisplay(sinceDate)} 以来的 Git 变更...`));
     
     // Initialize GitAnalyzer with default ignores
     const ig = ignore();

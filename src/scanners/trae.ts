@@ -166,7 +166,8 @@ export class TraeScanner extends BaseScanner {
     gitRepoPath: string,
     projectPath: string,
     sessionId: string,
-    model: string
+    model: string,
+    extractLineContent: boolean = false
   ): { changes: FileChange[]; timestamp: Date } {
     const changes: FileChange[] = [];
     let sessionTimestamp = new Date();
@@ -207,45 +208,79 @@ export class TraeScanner extends BaseScanner {
 
       // Get the session timestamp from the very last tag
       const finalEndTag = relevantTags[relevantTags.length - 1];
-      const tagDateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', finalEndTag], {
-        cwd: gitRepoPath,
-        encoding: 'utf8'
-      });
-      if (tagDateResult.stdout) {
-        const dateStr = tagDateResult.stdout.trim();
-        if (dateStr) {
-          sessionTimestamp = new Date(dateStr);
+      
+      // [P0优化] 一次性获取所有 relevantTags 的时间戳，避免在文件循环内重复调用
+      const tagTimestampMap = new Map<string, Date>();
+      for (const tag of relevantTags) {
+        const dateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', tag], {
+          cwd: gitRepoPath,
+          encoding: 'utf8'
+        });
+        if (dateResult.stdout) {
+          const dateStr = dateResult.stdout.trim();
+          if (dateStr) tagTimestampMap.set(tag, new Date(dateStr));
+        }
+      }
+      
+      if (tagTimestampMap.has(finalEndTag)) {
+        sessionTimestamp = tagTimestampMap.get(finalEndTag)!;
+      }
+
+      // [P1优化] 提前获取项目文件列表并缓存，避免在文件循环内重复调用 git ls-files
+      const projectFilesByLower = new Map<string, string>();
+      try {
+        const lsOutput = spawnSync('git', ['ls-files'], { cwd: projectPath, encoding: 'utf8' }).stdout;
+        for (const f of lsOutput.split('\n')) {
+          const trimmed = f.trim();
+          if (trimmed) projectFilesByLower.set(trimmed.toLowerCase(), trimmed);
+        }
+      } catch {
+        // ignore - project may not be a git repo
+      }
+
+      // [P1优化] 使用 O(M) 算法查找 lastTag，而不是 O(N×M)
+      // 步骤 1: 构建 tag -> Set<files> 映射 (遍历 tags 一次)
+      const tagToFilesMap = new Map<string, Set<string>>();
+      for (const tag of relevantTags) {
+        const filesInTag = new Set<string>();
+        const lsTreeOutput = spawnSync('git', ['ls-tree', '-r', '--name-only', tag, 'disk/content'], {
+          cwd: gitRepoPath,
+          encoding: 'utf8'
+        }).stdout;
+        
+        for (const f of lsTreeOutput.split('\n')) {
+          const trimmed = f.trim();
+          if (trimmed) filesInTag.add(trimmed);
+        }
+        tagToFilesMap.set(tag, filesInTag);
+      }
+
+      // 步骤 2: 构建 file -> lastTag 映射 (从后向前遍历 tags，只设置第一次遇到的)
+      const fileToLastTagMap = new Map<string, string>();
+      for (let i = relevantTags.length - 1; i >= 0; i--) {
+        const tag = relevantTags[i];
+        const filesInTag = tagToFilesMap.get(tag);
+        if (!filesInTag) continue;
+        
+        for (const filePath of filesInTag) {
+          // 只设置还没有 lastTag 的文件（从后向前确保找到最近的）
+          if (!fileToLastTagMap.has(filePath)) {
+            fileToLastTagMap.set(filePath, tag);
+          }
         }
       }
 
       for (const filePath of allFiles) {
-        let lastTagWithFile: string | null = null;
-        // Traverse backwards to find the last tag where this file existed
-        for (let i = relevantTags.length - 1; i >= 0; i--) {
-            const tag = relevantTags[i];
-            const check = spawnSync('git', ['cat-file', '-e', `${tag}:${filePath}`], {
-                cwd: gitRepoPath,
-                stdio: 'ignore'
-            });
-            if (check.status === 0) {
-                lastTagWithFile = tag;
-                break;
-            }
-        }
+        // [P1优化] 直接从 Map 获取 lastTag，O(1) 复杂度
+        const lastTagWithFile = fileToLastTagMap.get(filePath) || null;
 
         if (!lastTagWithFile) continue;
 
-        // Get the specific timestamp for this file's last change
+        // Get the specific timestamp for this file's last change (使用缓存的 tagTimestampMap)
         let fileTimestamp = sessionTimestamp;
-        const fileTagDateResult = spawnSync('git', ['tag', '--format=%(creatordate:iso)', '-l', lastTagWithFile], {
-          cwd: gitRepoPath,
-          encoding: 'utf8'
-        });
-        if (fileTagDateResult.stdout) {
-          const dateStr = fileTagDateResult.stdout.trim();
-          if (dateStr) {
-            fileTimestamp = new Date(dateStr);
-          }
+        const cachedTimestamp = tagTimestampMap.get(lastTagWithFile);
+        if (cachedTimestamp) {
+          fileTimestamp = cachedTimestamp;
         }
 
         // Use git diff to get net changes between start and the last tag containing the file
@@ -271,9 +306,8 @@ export class TraeScanner extends BaseScanner {
             continue;
           }
 
-          // Case-insensitive project path matching for Windows/Mac
-          const realProjectFiles = spawnSync('git', ['ls-files'], { cwd: projectPath, encoding: 'utf8' }).stdout.split('\n');
-          const matchedRealFile = realProjectFiles.find(f => f.toLowerCase() === relativePath.toLowerCase());
+          // [P0优化] 使用预缓存的 projectFilesByLower 进行大小写不敏感匹配
+          const matchedRealFile = projectFilesByLower.get(relativePath.toLowerCase());
           if (matchedRealFile) {
             relativePath = matchedRealFile;
           }
@@ -326,7 +360,8 @@ export class TraeScanner extends BaseScanner {
                 }
               }
 
-              if (realAdded > 0 || realRemoved > 0) {
+              // [P1优化] 仅在 extractLineContent 为 true 时才执行 diff + 解析行内容
+              if (extractLineContent && (realAdded > 0 || realRemoved > 0)) {
                 const fileDiff = spawnSync('git', ['diff', '-U0', `${lastTagWithFile}:${basePath}`, `${lastTagWithFile}:${filePath}`], {
                   cwd: gitRepoPath,
                   encoding: 'utf8'
@@ -335,7 +370,7 @@ export class TraeScanner extends BaseScanner {
                 removedLines = this.extractRemovedLinesFromDiff(fileDiff);
               }
             } catch (e) {}
-          } else if (added > 0) {
+          } else if (added > 0 && extractLineContent) {
              try {
                const fileDiff = spawnSync('git', ['diff', '-U0', chainStartTag, lastTagWithFile, '--', filePath], {
                  cwd: gitRepoPath,

@@ -142,6 +142,75 @@ export abstract class BaseScanner {
   }
 
   /**
+   * Compute removed lines using LCS diff (non-empty lines only)
+   */
+  protected diffRemovedLines(before: string | undefined, after: string | undefined): string[] {
+    const beforeLines = this.extractNonEmptyLines(before);
+    const afterLines = this.extractNonEmptyLines(after);
+
+    if (beforeLines.length === 0) return [];
+    if (afterLines.length === 0) return beforeLines;
+
+    // Optimization: Trim common prefix
+    let start = 0;
+    while (start < beforeLines.length && start < afterLines.length && beforeLines[start] === afterLines[start]) {
+      start++;
+    }
+
+    // Optimization: Trim common suffix
+    let endBefore = beforeLines.length - 1;
+    let endAfter = afterLines.length - 1;
+    while (endBefore >= start && endAfter >= start && beforeLines[endBefore] === afterLines[endAfter]) {
+      endBefore--;
+      endAfter--;
+    }
+
+    // If identical or only common parts
+    if (start > endBefore && start > endAfter) {
+      return [];
+    }
+
+    // Run LCS on the changed part
+    const subBefore = beforeLines.slice(start, endBefore + 1);
+    const subAfter = afterLines.slice(start, endAfter + 1);
+
+    const m = subBefore.length;
+    const n = subAfter.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (subBefore[i - 1] === subAfter[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+
+    const removed: string[] = [];
+    let i = m;
+    let j = n;
+    while (i > 0 && j > 0) {
+      if (subBefore[i - 1] === subAfter[j - 1]) {
+        i--;
+        j--;
+      } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+        removed.push(subBefore[i - 1]);
+        i--;
+      } else {
+        j--;
+      }
+    }
+    while (i > 0) {
+      removed.push(subBefore[i - 1]);
+      i--;
+    }
+
+    return removed.reverse();
+  }
+
+  /**
    * Compute added/removed line counts using LCS diff (non-empty lines only)
    */
   protected diffLineCounts(before: string | undefined, after: string | undefined): { added: number; removed: number } {

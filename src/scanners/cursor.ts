@@ -17,6 +17,7 @@ type FileAccumulator = {
   added: number;
   removed: number;
   addedLines: string[];
+  removedLines: string[];
 };
 
 type SqlJsCache = {
@@ -413,6 +414,7 @@ export class CursorScanner extends BaseScanner {
         acc.added = counts.added;
         acc.removed = counts.removed;
         acc.addedLines.push(...this.diffAddedLines(originalContent, currentContent));
+        acc.removedLines.push(...this.diffRemovedLines(originalContent, currentContent));
       }
     }
 
@@ -427,6 +429,7 @@ export class CursorScanner extends BaseScanner {
         timestamp,
         tool: this.tool,
         addedLines: acc.addedLines.length > 0 ? acc.addedLines : undefined,
+        removedLinesContent: acc.removedLines.length > 0 ? acc.removedLines : undefined,
         model,
       });
     }
@@ -509,28 +512,34 @@ export class CursorScanner extends BaseScanner {
           ? segment.original.endLineNumberExclusive
           : null;
         if (start !== null && end !== null && originalLines.length > 0) {
-          const removed = this.countNonEmptyLinesInRange(originalLines, start, end);
-          acc.removed += removed;
+          // Extract removed lines
+          const removedLines = this.extractNonEmptyLinesInRange(originalLines, start, end);
+          acc.removed += removedLines.length;
+          acc.removedLines.push(...removedLines);
         }
       }
     }
   }
 
-  private countNonEmptyLinesInRange(lines: string[], startLineNumber: number, endLineNumberExclusive: number): number {
-    if (endLineNumberExclusive <= startLineNumber) return 0;
+  private extractNonEmptyLinesInRange(lines: string[], startLineNumber: number, endLineNumberExclusive: number): string[] {
+    if (endLineNumberExclusive <= startLineNumber) return [];
     const startIdx = Math.max(0, startLineNumber - 1);
     const endIdx = Math.max(startIdx, endLineNumberExclusive - 1);
-    let count = 0;
+    const result: string[] = [];
     for (let i = startIdx; i < Math.min(endIdx, lines.length); i++) {
-      if (lines[i].length > 0) count++;
+      if (lines[i].length > 0) result.push(lines[i]);
     }
-    return count;
+    return result;
+  }
+
+  private countNonEmptyLinesInRange(lines: string[], startLineNumber: number, endLineNumberExclusive: number): number {
+    return this.extractNonEmptyLinesInRange(lines, startLineNumber, endLineNumberExclusive).length;
   }
 
   private getAccumulator(map: Map<string, FileAccumulator>, filePath: string): FileAccumulator {
     let acc = map.get(filePath);
     if (!acc) {
-      acc = { filePath, added: 0, removed: 0, addedLines: [] };
+      acc = { filePath, added: 0, removed: 0, addedLines: [], removedLines: [] };
       map.set(filePath, acc);
     }
     return acc;

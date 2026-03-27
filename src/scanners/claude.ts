@@ -273,6 +273,7 @@ export class ClaudeScanner extends BaseScanner {
     let linesAdded = 0;
     let linesRemoved = 0;
     let addedLines: string[] = [];
+    let removedLines: string[] = [];
 
     if (writeOps.includes(toolName)) {
       changeType = oldContent ? 'modify' : 'create';
@@ -281,6 +282,7 @@ export class ClaudeScanner extends BaseScanner {
       linesRemoved = stats.removed;
       if (oldContent && newContent) {
         addedLines = this.diffAddedLines(oldContent, newContent);
+        removedLines = this.diffRemovedLines(oldContent, newContent);
       } else {
         addedLines = this.extractNonEmptyLines(newContent);
       }
@@ -291,6 +293,7 @@ export class ClaudeScanner extends BaseScanner {
         linesAdded = stats.added;
         linesRemoved = stats.removed;
         addedLines = this.diffAddedLines(oldContent, newContent);
+        removedLines = this.diffRemovedLines(oldContent, newContent);
       } else {
         const stats = this.diffLineCounts(oldContent, newContent);
         linesAdded = stats.added;
@@ -316,6 +319,7 @@ export class ClaudeScanner extends BaseScanner {
       tool: this.tool,
       content: newContent,
       addedLines,
+      removedLinesContent: removedLines.length > 0 ? removedLines : undefined,
       model,
     };
   }

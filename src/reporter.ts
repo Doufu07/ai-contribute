@@ -147,11 +147,9 @@ export class ConsoleReporter {
     
     // When using --since, denominator logic:
     // Files: Total active files
-    // Lines: Added Lines of Original Data (instead of Net Increment)
-    // This represents "How much of the NEWLY ADDED code came from AI"
+    // Lines: Added Lines (Gross) — same as "新增代码" column
     if (stats.projectChanges) {
         originalFiles = stats.projectChanges.totalFiles;
-        // Use Added Lines as denominator for line share (per user request)
         originalLines = stats.projectChanges.linesAdded;
     }
 
@@ -169,14 +167,12 @@ export class ConsoleReporter {
     const contribLinesDisplay = verifiedLines.toString();
     const contribDeletedDisplay = verifiedDeleted.toString();
 
-    // Calculate Net Increment for Original Data
-    // Use net lines (added - removed) for display
+    // Calculate Display for Added Lines (Gross)
     let rawNetDisplay = '-';
     if (stats.projectChanges) {
-        const net = stats.projectChanges.netLinesAdded;
-        rawNetDisplay = net > 0 ? chalk.green(`+${net}`) : net < 0 ? chalk.red(`${net}`) : '0';
+        const added = stats.projectChanges.linesAdded;
+        rawNetDisplay = added > 0 ? chalk.green(`+${added}`) : '0';
     } else {
-        // Full scan: Net is Total
         rawNetDisplay = chalk.green(`+${stats.totalLines}`);
     }
     
@@ -455,12 +451,19 @@ export class ConsoleReporter {
       // If we have added lines data (from --since or creation), calculate ratio against that.
       // Otherwise fallback to total lines ratio.
       let ratioValue = fileStats.aiContributionRatio;
-      
+
       if (stats.projectChanges && addedLinesValue > 0) {
         // AI Contribution / Added Lines
         ratioValue = fileStats.aiContributedLines / addedLinesValue;
+      } else if (stats.projectChanges && addedLinesValue === 0 && fileStats.totalLines > 0) {
+        // File is in projectChanges but Git reports 0 added (e.g. file predates --since baseline).
+        // Fall back to total lines ratio so we don't divide by zero or show meaningless %.
+        ratioValue = fileStats.aiContributedLines / fileStats.totalLines;
       }
-      
+
+      // Cap at 100% to avoid displaying >100% due to counting discrepancies between
+      // Git diff and scanner output (e.g. blank line treatment differences).
+      ratioValue = Math.min(ratioValue, 1.0);
       const ratio = (ratioValue * 100).toFixed(1) + '%';
       const aiContribution = `${fileStats.aiContributedLines} (${ratio})`;
 

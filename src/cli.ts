@@ -7,7 +7,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'worker_threads'
 import { ContributionAnalyzer } from './analyzer.js'
 import { ConsoleReporter, JsonReporter, MarkdownReporter } from './reporter.js'
 import { AITool, ContributionStats, OutputFormat, VerificationMode } from './types.js'
-import { parseDate } from './utils/utils.js'
+import { parseDate, formatCSTDisplay } from './utils/time.js'
 import { printGitAnalysisResult, runGitAnalysis } from './utils/gitStat.js'
 
 // This is replaced at build time with the actual version
@@ -214,7 +214,7 @@ function generateLogFile(stats: any, repoPath: string) {
   const logFileName = `ai-contributions-${timestamp}.log`;
   const logPath = path.resolve(logsDir, logFileName);
   
-  let logContent = `AI Contribution Log - ${new Date().toISOString()}\n`;
+  let logContent = `AI Contribution Log - ${formatCSTDisplay(new Date())}\n`;
   logContent += `Project: ${repoPath}\n`;
   logContent += `Total AI Contributed Lines: ${stats.aiContributedLines}\n\n`;
   
@@ -262,7 +262,7 @@ function generateOriginalFilesLog(stats: any, repoPath: string, timestamp: strin
   const logFileName = `original-files-${timestamp}.log`;
   const logPath = path.resolve(logsDir, logFileName);
   
-  let logContent = `${title} - ${new Date().toISOString()}\n`;
+  let logContent = `${title} - ${formatCSTDisplay(new Date())}\n`;
   logContent += `Project: ${repoPath}\n`;
   if (stats.projectChanges) {
       const net = stats.projectChanges.netLinesAdded;

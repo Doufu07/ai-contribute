@@ -1,6 +1,7 @@
 import { execFileSync } from 'child_process';
 import { AISession, AITool, FileChange, VerificationMode } from '../types.js';
 import { isLineEmptyOrWhitespace } from '../utils/utils.js';
+import { formatCSTISO, getGitEnv } from '../utils/time.js';
 
 export type RepoFileInfo = {
   totalLines: number;
@@ -49,16 +50,18 @@ export class GitHistoryProvider implements HistoryProvider {
   }
 
   getFileLinesSetBeforeTimestamp(filePath: string, timestamp: Date): Set<string> | null {
+    // 使用东八区时间格式（与Git命令一致）
+    const cstTimestamp = formatCSTISO(timestamp);
     try {
       // Find the last commit before the timestamp that modified this file
-      const isoTimestamp = timestamp.toISOString();
       const result = execFileSync(
         'git',
-        ['log', '-1', '--format=%H', '--before=' + isoTimestamp, '--', filePath],
+        ['log', '-1', '--format=%H', '--before=' + cstTimestamp, '--', filePath],
         {
           cwd: this.projectPath,
           encoding: 'utf-8',
           stdio: ['ignore', 'pipe', 'ignore'],
+          env: getGitEnv(),
         }
       ).trim();
 
@@ -71,6 +74,7 @@ export class GitHistoryProvider implements HistoryProvider {
             cwd: this.projectPath,
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'ignore'],
+            env: getGitEnv(),
           }
         );
 
@@ -79,8 +83,40 @@ export class GitHistoryProvider implements HistoryProvider {
         return new Set(lines);
       }
     } catch {
-      // File might not have existed before this timestamp
+      // No commits before this timestamp
     }
+
+    // git log --before 返回空，可能是：
+    // 1. 文件确实是在 AI 会话之后才创建的（真正的新建文件）→ 返回 null
+    // 2. Git 查询失败（时区问题、commit 在边界等）→ 需要进一步确认
+    // 用 getFileCreateTime 判断：文件是否在 AI 会话前就已经存在
+    try {
+      const createResult = execFileSync(
+        'git',
+        ['log', '--diff-filter=A', '--format=%ai', '--', filePath],
+        {
+          cwd: this.projectPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }
+      ).trim();
+
+      if (createResult) {
+        const firstLine = createResult.split('\n')[0]?.trim();
+        if (firstLine) {
+          const createTime = new Date(firstLine);
+          // 文件在 AI 会话前就已存在，但 git log --before 查不到（时区/边界问题）
+          // 返回空 Set：基线为空，不排除任何行，让后续 remainingCount 逻辑正常工作
+          if (createTime < timestamp) {
+            return new Set();
+          }
+        }
+      }
+    } catch {
+      // 文件未被 Git 跟踪，当作新建文件处理
+    }
+
+    // 文件确实是在 AI 会话后才创建的 → 返回 null 表示新建文件
     return null;
   }
 }
@@ -89,11 +125,20 @@ export class ContributionVerifier {
   private projectPath: string;
   private verificationMode: VerificationMode;
   private historyProvider: HistoryProvider;
+  private debugMode: boolean;
 
-  constructor(projectPath: string, verificationMode: VerificationMode, historyProvider?: HistoryProvider) {
+  constructor(projectPath: string, verificationMode: VerificationMode, historyProvider?: HistoryProvider, debugMode: boolean = false) {
     this.projectPath = projectPath;
     this.verificationMode = verificationMode;
     this.historyProvider = historyProvider || new GitHistoryProvider(projectPath);
+    // Check environment variable for debug mode
+    this.debugMode = debugMode || process.env.AI_CONTRIBUTE_DEBUG === '1';
+  }
+
+  private debugLog(...args: any[]): void {
+    if (this.debugMode) {
+      console.error('[DEBUG]', ...args);
+    }
   }
 
   /**
@@ -317,52 +362,85 @@ export class ContributionVerifier {
     const remainingNormalized = verifiedNormalizedRemainingByFile.get(filePath);
 
     if (!remainingExact && !remainingHighFreq) {
-      // console.log(`[DEBUG] No remaining lines for ${filePath}`);
+      this.debugLog(`[${filePath}] No remaining lines for file`);
       return { matched: 0, content: [] };
     }
+
+    // 获取基线内容用于排除旧代码（方案二：基线对比验证）
+    // 基线 = AI 会话开始前的文件内容
+    const baselineSet = this.getFileLinesSetBeforeTimestamp(filePath, change.timestamp);
+    // 是否是新建文件（基线为空）
+    const isNewFile = baselineSet === null;
+
+    this.debugLog(`[${filePath}] Verifying ${addedLines.length} added lines, baseline: ${isNewFile ? 'new file' : baselineSet?.size + ' lines'}, mode: ${this.verificationMode}`);
 
     let matched = 0;
     try {
       for (const line of addedLines) {
-        if (isLineEmptyOrWhitespace(line)) continue;
+        if (isLineEmptyOrWhitespace(line)) {
+          this.debugLog(`  SKIP (empty): "${line.substring(0, 50)}"`);
+          continue;
+        }
 
-        // Check if line exists in file
+        // 检查该行是否存在于当前文件中
         const exactMatch = fileInfo.lineSet.has(line);
         let normalizedMatch = false;
-        if (!exactMatch && this.verificationMode === 'relaxed') {
-          const normalized = normalizeLine(line);
-          normalizedMatch = normalized.length > 0 && fileInfo.normalizedLineSet.has(normalized);
-        }
-        
-        if (!exactMatch && !normalizedMatch) continue;
+        let normalizedContent = '';
 
-        // Check if we have remaining count for this line
+        // 在 relaxed 模式下，计算规范化内容（无论 exactMatch 是否为 true）
+        if (this.verificationMode === 'relaxed') {
+          normalizedContent = normalizeLine(line);
+          normalizedMatch = normalizedContent.length > 0 && fileInfo.normalizedLineSet.has(normalizedContent);
+        }
+
+        if (!exactMatch && !normalizedMatch) {
+          this.debugLog(`  SKIP (not in current file): "${line.substring(0, 50)}"`);
+          continue;
+        }
+
+        // 方案二核心逻辑：检查该行是否在基线中存在
+        // 如果基线中存在该行，说明这是旧代码保留，不是 AI 新增
+        // 在 relaxed 模式下，需要检查规范化后的内容是否在基线中
+        if (baselineSet?.has(line)) {
+          // 精确匹配在基线中，直接跳过
+          this.debugLog(`  SKIP (exact in baseline): "${line.substring(0, 50)}"`);
+          continue;
+        } else if (this.verificationMode === 'relaxed' && normalizedContent && baselineSet?.has(normalizedContent)) {
+          // 规范化后的内容在基线中，跳过
+          this.debugLog(`  SKIP (normalized in baseline): "${line.substring(0, 50)}" (normalized: "${normalizedContent.substring(0, 30)}")`);
+          continue;
+        } else if (isNewFile) {
+          // 对于新建文件（baselineSet === null），基线为空
+          // 所有行都应计入，但仍需检查是否在其他会话中已计入
+          this.debugLog(`  NEW FILE - checking remaining count`);
+        }
+
+        // 检查是否还有剩余计数（用于跨会话去重）
         if (exactMatch) {
           let counted = false;
-          // Try high frequency cache first
+          // 优先检查高频行缓存
           if (line.length < HIGH_FREQ_THRESHOLD && remainingHighFreq) {
              const count = remainingHighFreq[line] || 0;
              if (count > 0) {
                  remainingHighFreq[line] = count - 1;
                  counted = true;
+             } else {
+               this.debugLog(`  SKIP (highFreq exhausted): "${line.substring(0, 50)}"`);
              }
-          } 
-          
-          // Try normal map if not found in high freq (or not high freq)
-          if (!counted && remainingExact) {
-              // Only check map if not high freq (or if implementation allows fallback, though high freq should be exclusive)
-              // Here we assume exclusive split: if it's high freq, it's ONLY in high freq obj
-              if (line.length >= HIGH_FREQ_THRESHOLD) {
-                  const remaining = remainingExact.get(line) || 0;
-                  if (remaining > 0) {
-                      remainingExact.set(line, remaining - 1);
-                      counted = true;
-                  }
-              }
+          } else if (line.length >= HIGH_FREQ_THRESHOLD && remainingExact) {
+             const remaining = remainingExact.get(line) || 0;
+             if (remaining > 0) {
+                 remainingExact.set(line, remaining - 1);
+                 counted = true;
+             } else {
+               this.debugLog(`  SKIP (remaining exhausted): "${line.substring(0, 50)}"`);
+             }
+          } else if (line.length < HIGH_FREQ_THRESHOLD && !remainingHighFreq) {
+            this.debugLog(`  SKIP (no highFreq map): "${line.substring(0, 50)}"`);
           }
-          
+
           if (counted) {
-              // Also decrement normalized count if in relaxed mode
+              // 在 relaxed 模式下，同时递减规范化计数
               if (this.verificationMode === 'relaxed' && remainingNormalized) {
                 const normalized = normalizeLine(line);
                 const normRemaining = remainingNormalized.get(normalized) || 0;
@@ -372,8 +450,9 @@ export class ContributionVerifier {
               }
               matched++;
               resultLines.push(line);
+              this.debugLog(`  COUNTED (exact): "${line.substring(0, 50)}"`);
           }
-          
+
         } else if (normalizedMatch && remainingNormalized) {
           const normalized = normalizeLine(line);
           const remaining = remainingNormalized.get(normalized) || 0;
@@ -381,7 +460,12 @@ export class ContributionVerifier {
             remainingNormalized.set(normalized, remaining - 1);
             matched++;
             resultLines.push(line);
+            this.debugLog(`  COUNTED (normalized): "${line.substring(0, 50)}"`);
+          } else {
+            this.debugLog(`  SKIP (normalized remaining exhausted): "${line.substring(0, 50)}"`);
           }
+        } else if (normalizedMatch && !remainingNormalized) {
+          this.debugLog(`  SKIP (no normalized map): "${line.substring(0, 50)}"`);
         }
 
       }

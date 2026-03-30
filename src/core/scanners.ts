@@ -71,8 +71,13 @@ export class ScannerManager {
       sessions.push(...filtered);
     }
 
-    // Sort by timestamp
-    sessions.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    // Sort by timestamp, then by session ID for deterministic order
+    sessions.sort((a, b) => {
+      const timeDiff = a.timestamp.getTime() - b.timestamp.getTime();
+      if (timeDiff !== 0) return timeDiff;
+      // Secondary sort by session ID for stable ordering when timestamps are equal
+      return a.id.localeCompare(b.id);
+    });
 
     return sessions;
   }

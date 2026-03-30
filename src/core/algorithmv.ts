@@ -310,6 +310,29 @@ export class ContributionVerifier {
       return { matched: 0, content: [] };
     }
 
+    // ===== 方案二：基线对比验证（对所有工具生效） =====
+    // 获取 AI 会话前的文件内容（基线），排除旧代码保留的行
+    let baselineSet: Set<string> | null = null;
+    if (change.timestamp) {
+      baselineSet = this.getFileLinesSetBeforeTimestamp(change.filePath, change.timestamp);
+    }
+
+    // 过滤掉基线中已存在的行（这些行在 AI 会话前已存在，不是 AI 新增）
+    if (baselineSet !== null && baselineSet.size > 0) {
+      addedLines = addedLines.filter(line => {
+        if (isLineEmptyOrWhitespace(line)) return false;
+        // 如果行在基线中存在，说明是旧代码，应该排除
+        if (baselineSet!.has(line)) return false;
+        // 在 relaxed 模式下，也检查规范化后的行
+        if (this.verificationMode === 'relaxed') {
+          const normalized = normalizeLine(line);
+          if (normalized.length > 0 && baselineSet!.has(normalized)) return false;
+        }
+        return true;
+      });
+    }
+    // 如果 baselineSet 为 null，说明文件在 AI 会话前不存在，所有行都是新增的，不需要过滤
+
     // Get remaining counts for this file
     const filePath = change.filePath;
     const remainingExact = verifiedLinesRemainingByFile.get(filePath);

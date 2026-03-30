@@ -44,7 +44,7 @@ export class OpencodeScanner extends BaseScanner {
 
     try {
       // Find all session files recursively (they are in subdirectories by project hash)
-      const sessionFiles = glob.sync('**/*.json', { cwd: sessionDir });
+      const sessionFiles = glob.sync('**/*.json', { cwd: sessionDir }).sort();
 
       for (const file of sessionFiles) {
         const session = this.parseSessionFile(path.join(sessionDir, file), projectPath);
@@ -93,7 +93,7 @@ export class OpencodeScanner extends BaseScanner {
         // Messages are stored in subdirectories by session ID
         const sessionMessageDir = path.join(messageDir, sessionData.id);
         if (fs.existsSync(sessionMessageDir)) {
-          const messageFiles = glob.sync('*.json', { cwd: sessionMessageDir });
+          const messageFiles = glob.sync('*.json', { cwd: sessionMessageDir }).sort();
           for (const msgFile of messageFiles) {
             const msgData = this.readJsonFile(path.join(sessionMessageDir, msgFile));
             if (msgData?.sessionID === sessionData.id) {

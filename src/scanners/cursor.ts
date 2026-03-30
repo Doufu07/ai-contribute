@@ -192,7 +192,7 @@ export class CursorScanner extends BaseScanner {
 
   private safeReadDir(dirPath: string): string[] {
     try {
-      return fs.readdirSync(dirPath);
+      return fs.readdirSync(dirPath).sort();
     } catch {
       return [];
     }

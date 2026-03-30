@@ -47,7 +47,7 @@ export class GeminiScanner extends BaseScanner {
     const tmpDir = path.join(basePath, 'tmp');
     if (fs.existsSync(tmpDir)) {
       try {
-        const allDirs = fs.readdirSync(tmpDir);
+        const allDirs = fs.readdirSync(tmpDir).sort();
         for (const dir of allDirs) {
           const fullDir = path.join(tmpDir, dir);
           if (fs.statSync(fullDir).isDirectory()) {
@@ -79,7 +79,7 @@ export class GeminiScanner extends BaseScanner {
 
     for (const dir of possibleDirs) {
       try {
-        const files = glob.sync('*.json', { cwd: dir });
+        const files = glob.sync('*.json', { cwd: dir }).sort();
         for (const file of files) {
           const session = this.parseSessionFile(path.join(dir, file), projectPath);
           if (session && session.changes.length > 0) {

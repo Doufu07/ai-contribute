@@ -169,12 +169,13 @@ export class ConsoleReporter {
     const contribLinesDisplay = verifiedLines.toString();
     const contribDeletedDisplay = verifiedDeleted.toString();
 
-    // Calculate Net Increment for Original Data
-    // Use net lines (added - removed) for display
+    // Calculate Added Lines for Original Data (新增代码)
+    // Show pure added lines instead of net increment
     let rawNetDisplay = '-';
     if (stats.projectChanges) {
-        const net = stats.projectChanges.netLinesAdded;
-        rawNetDisplay = net > 0 ? chalk.green(`+${net}`) : net < 0 ? chalk.red(`${net}`) : '0';
+        // Show added lines only (not net)
+        const added = stats.projectChanges.linesAdded;
+        rawNetDisplay = added > 0 ? chalk.green(`+${added}`) : '0';
     } else {
         // Full scan: Net is Total
         rawNetDisplay = chalk.green(`+${stats.totalLines}`);

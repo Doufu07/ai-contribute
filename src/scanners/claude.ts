@@ -72,7 +72,7 @@ export class ClaudeScanner extends BaseScanner {
 
     // Scan all directories to find matches
     try {
-      const allDirs = fs.readdirSync(basePath);
+      const allDirs = fs.readdirSync(basePath).sort();
       for (const dir of allDirs) {
         const fullDir = path.join(basePath, dir);
         if (!fs.statSync(fullDir).isDirectory()) continue;
@@ -100,9 +100,9 @@ export class ClaudeScanner extends BaseScanner {
     }
 
     // Parse all session files from matching directories
-    for (const dir of possibleDirs) {
+    for (const dir of Array.from(possibleDirs).sort()) {
       try {
-        const files = glob.sync('*.jsonl', { cwd: dir });
+        const files = glob.sync('*.jsonl', { cwd: dir }).sort();
         for (const file of files) {
           const session = this.parseSessionFile(path.join(dir, file), projectPath);
           // Return all sessions (including those without code changes)

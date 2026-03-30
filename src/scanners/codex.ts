@@ -37,7 +37,7 @@ export class CodexScanner extends BaseScanner {
 
     try {
       // Recursively find all JSONL files
-      const files = glob.sync('**/*.jsonl', { cwd: basePath });
+      const files = glob.sync('**/*.jsonl', { cwd: basePath }).sort();
 
       for (const file of files) {
         const fullPath = path.join(basePath, file);

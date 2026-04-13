@@ -349,9 +349,11 @@ export class CodexScanner extends BaseScanner {
     let linesAdded = 0;
     let linesRemoved = 0;
     let addedLines: string[] = [];
+    let operation: 'write' | 'edit' | undefined;
 
     if (writeOps.includes(funcName)) {
       changeType = oldContent ? 'modify' : 'create';
+      operation = 'write';
       const stats = this.diffLineCounts(oldContent, newContent);
       linesAdded = stats.added;
       linesRemoved = stats.removed;
@@ -362,6 +364,7 @@ export class CodexScanner extends BaseScanner {
       }
     } else if (editOps.includes(funcName)) {
       changeType = 'modify';
+      operation = 'edit';
       if ((funcName === 'apply_diff' || funcName === 'patch') && args.diff) {
         const diffStats = this.parseDiff(args.diff);
         linesAdded = diffStats.added;
@@ -393,6 +396,7 @@ export class CodexScanner extends BaseScanner {
       tool: this.tool,
       content: newContent,
       addedLines,
+      operation,
     };
   }
 

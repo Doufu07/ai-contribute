@@ -224,7 +224,55 @@ export class ContributionAnalyzer {
     };
   }
 
+  /**
+   * 扫描并验证会话，供按会话导出 Markdown 等场景使用（不构建完整 ContributionStats）
+   */
+  getVerifiedSessions(tools?: AITool[], onProgress?: (filePath: string) => void): VerifiedSession[] {
+    this.loadGitignore();
+    const sessions = this.scanAllSessions(tools);
 
+    if (this.targetDirectory) {
+      const prefix = this.targetDirectory + '/';
+      for (const session of sessions) {
+        session.changes = session.changes.filter(change =>
+          change.filePath.startsWith(prefix) || change.filePath.startsWith('/' + prefix)
+        );
+        session.totalFilesChanged = new Set(session.changes.map(c => c.filePath)).size;
+        session.totalLinesAdded = session.changes.reduce((sum, c) => sum + c.linesAdded, 0);
+        session.totalLinesRemoved = session.changes.reduce((sum, c) => sum + c.linesRemoved, 0);
+      }
+    }
+
+    const allRepoFiles = this.gitAnalyzer.getRepoFiles(this.targetDirectory);
+    let repoFiles = [...allRepoFiles];
+
+    if (this.since) {
+      const touchedFiles = new Set<string>();
+      for (const session of sessions) {
+        for (const change of session.changes) {
+          touchedFiles.add(change.filePath);
+        }
+      }
+      repoFiles = repoFiles.filter(file => touchedFiles.has(file));
+    }
+
+    const repoFileSet = new Set(repoFiles);
+    const filesNeedingLineSet = this.verificationMode === 'historical'
+      ? undefined
+      : new Set<string>();
+
+    for (const session of sessions) {
+      for (const change of session.changes) {
+        if (filesNeedingLineSet && repoFileSet.has(change.filePath)) {
+          filesNeedingLineSet.add(change.filePath);
+        }
+      }
+    }
+
+    const repoFileIndex = this.buildRepoFileIndex(repoFiles, filesNeedingLineSet, onProgress);
+    const verifier = new ContributionVerifier(this.projectPath, this.verificationMode, this.historyProvider);
+    return verifier.verifySessions(sessions, repoFileIndex);
+  }
 
   /**
    * Compute session type statistics for all sessions

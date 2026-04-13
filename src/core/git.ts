@@ -206,6 +206,19 @@ export class GitAnalyzer {
           });
 
           this.parseDiffContent(diffContent, fileDiffs);
+
+          // Inject untracked files into stats for commit-based baseline too
+          this.injectUntrackedIntoStatsAndDiffs({
+            fileStats,
+            activeFiles,
+            totalLines: {
+              add: (n: number) => (totalLinesAdded += n),
+              addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+              addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+            },
+            fileDiffs,
+            targetDirectory,
+          });
         } else {
           const committedDiff = execFileSync('git', [
             'diff',
@@ -511,6 +524,19 @@ export class GitAnalyzer {
         }
       }
 
+      // Inject untracked files into stats (new files not yet committed)
+      this.injectUntrackedIntoStatsAndDiffs({
+        fileStats,
+        activeFiles,
+        totalLines: {
+          add: (n: number) => (totalLinesAdded += n),
+          addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+          addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+        },
+        fileDiffs,
+        targetDirectory,
+      });
+
       return {
         totalFiles: activeFiles.size,
         linesAdded: totalLinesAdded,
@@ -521,7 +547,7 @@ export class GitAnalyzer {
         fileStats,
         emptyLinesAdded: totalEmptyLinesAdded,
         emptyLinesRemoved: totalEmptyLinesRemoved,
-        gitStatusWarning: 'Using diff-based calculation from base commit',
+        gitStatusWarning: undefined,
       };
     } catch (e) {
       console.error('Error in getProjectChangesFromBaseCommit:', e);
@@ -775,6 +801,37 @@ export class GitAnalyzer {
     }
   }
 
+  /**
+   * Get untracked files (not committed, not ignored)
+   * 获取未跟踪文件（未提交且未被忽略）
+   */
+  private getUntrackedFiles(): string[] {
+    const repoRoot = this.getGitRepoRoot();
+    if (!repoRoot) return [];
+
+    const relativeRoot = path.relative(repoRoot, this.projectPath);
+    const normalizedRelativeRoot = this.normalizePathSegment(relativeRoot);
+    const pathspec = normalizedRelativeRoot ? [normalizedRelativeRoot] : [];
+
+    try {
+      const untracked = this.runGitLsFiles([
+        'ls-files',
+        '-z',
+        '--others',
+        '--exclude-standard',
+        ...(pathspec.length > 0 ? ['--', ...pathspec] : []),
+      ]);
+      const normalized = this.normalizeGitPaths(untracked, normalizedRelativeRoot);
+      return normalized.filter(file => {
+        if (this.ignores.ignores(file)) return false;
+        if (!this.isTextFile(file)) return false;
+        return true;
+      });
+    } catch {
+      return [];
+    }
+  }
+
   private injectUntrackedIntoStatsAndDiffs(params: {
     fileStats: Map<string, { added: number; removed: number }>;
     activeFiles: Set<string>;
@@ -787,7 +844,6 @@ export class GitAnalyzer {
     targetDirectory?: string;
   }): void {
     const untracked = this.getUntrackedFiles();
-
     for (const filePath of untracked) {
       if (params.targetDirectory && !filePath.startsWith(params.targetDirectory + '/')) {
         continue;

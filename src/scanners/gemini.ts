@@ -311,11 +311,13 @@ export class GeminiScanner extends BaseScanner {
     let linesAdded = 0;
     let linesRemoved = 0;
     let addedLines: string[] = [];
+    let operation: 'write' | 'edit' | undefined;
 
     if (writeOps.includes(funcName)) {
       const stats = this.calculateDiffStats(oldContent, newContent);
       linesAdded = stats.added;
       linesRemoved = stats.removed;
+      operation = 'write';
       if (oldContent && newContent) {
         addedLines = this.diffAddedLines(oldContent, newContent);
       } else {
@@ -326,6 +328,7 @@ export class GeminiScanner extends BaseScanner {
       const stats = this.calculateDiffStats(oldContent, newContent);
       linesAdded = stats.added;
       linesRemoved = stats.removed;
+      operation = 'edit';
       if (oldContent && newContent) {
         addedLines = this.diffAddedLines(oldContent, newContent);
       } else {
@@ -350,6 +353,7 @@ export class GeminiScanner extends BaseScanner {
       content: newContent,
       addedLines,
       model,
+      operation,
     };
   }
 

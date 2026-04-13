@@ -48,6 +48,8 @@ export interface FileChange {
   addedLines?: string[];
   removedLinesContent?: string[];
   model?: string;
+  /** 操作类型：'write' = 新建/覆盖文件，'edit' = 局部编辑 */
+  operation?: 'write' | 'edit';
 }
 
 /**

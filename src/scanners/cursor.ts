@@ -17,6 +17,8 @@ type FileAccumulator = {
   added: number;
   removed: number;
   addedLines: string[];
+  /** 'write' = 新建/覆盖文件（无原始内容），'edit' = 编辑已有文件 */
+  operation?: 'write' | 'edit';
 };
 
 type SqlJsCache = {
@@ -381,7 +383,7 @@ export class CursorScanner extends BaseScanner {
           const resolvedPath = path.resolve(filePath);
           if (!this.isProjectFile(resolvedPath, projectPath)) continue;
 
-          const acc = this.getAccumulator(fileChanges, resolvedPath);
+          const acc = this.getAccumulator(fileChanges, resolvedPath, originalContent ? 'edit' : 'write');
           const originalContent =
             originalContentByPath.get(resolvedPath) ??
             originalContentByUri.get(fileUriKey) ??
@@ -408,11 +410,13 @@ export class CursorScanner extends BaseScanner {
         const addedLines = this.extractNonEmptyLines(currentContent);
         acc.added = addedLines.length;
         acc.addedLines.push(...addedLines);
+        if (!acc.operation) acc.operation = 'write';
       } else if (originalContent) {
         const counts = this.diffLineCounts(originalContent, currentContent);
         acc.added = counts.added;
         acc.removed = counts.removed;
         acc.addedLines.push(...this.diffAddedLines(originalContent, currentContent));
+        if (!acc.operation) acc.operation = 'edit';
       }
     }
 
@@ -428,6 +432,7 @@ export class CursorScanner extends BaseScanner {
         tool: this.tool,
         addedLines: acc.addedLines.length > 0 ? acc.addedLines : undefined,
         model,
+        operation: acc.operation,
       });
     }
 
@@ -489,7 +494,15 @@ export class CursorScanner extends BaseScanner {
     return [];
   }
 
-  private applyDiffSegments(acc: FileAccumulator, segments: any[], originalContent: string): void {
+  private applyDiffSegments(
+    acc: FileAccumulator,
+    segments: any[],
+    originalContent: string,
+    operation?: 'write' | 'edit'
+  ): void {
+    if (operation && !acc.operation) {
+      acc.operation = operation;
+    }
     const originalLines = originalContent ? this.splitLines(originalContent) : [];
 
     for (const segment of segments) {
@@ -527,10 +540,10 @@ export class CursorScanner extends BaseScanner {
     return count;
   }
 
-  private getAccumulator(map: Map<string, FileAccumulator>, filePath: string): FileAccumulator {
+  private getAccumulator(map: Map<string, FileAccumulator>, filePath: string, operation?: 'write' | 'edit'): FileAccumulator {
     let acc = map.get(filePath);
     if (!acc) {
-      acc = { filePath, added: 0, removed: 0, addedLines: [] };
+      acc = { filePath, added: 0, removed: 0, addedLines: [], operation };
       map.set(filePath, acc);
     }
     return acc;

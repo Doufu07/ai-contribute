@@ -9,6 +9,7 @@ import { ConsoleReporter, JsonReporter, MarkdownReporter } from './reporter.js'
 import { AITool, ContributionStats, OutputFormat, VerificationMode } from './types.js'
 import { parseDate } from './utils/utils.js'
 import { printGitAnalysisResult, runGitAnalysis } from './utils/gitStat.js'
+import { exportVerifiedSessionsToMarkdown } from './utils/sessionMarkdownExport.js'
 
 // This is replaced at build time with the actual version
 const packageJson = { version: '1.0.0' };
@@ -504,6 +505,63 @@ program
     }
 
     runGitAnalysis(resolvedPath, sinceDate, options.directory);
+  });
+
+// 按会话导出验证后的代码内容为 Markdown（logs/session-md-{时间戳}/）
+program
+  .command('export-sessions [path]')
+  .description('将各 AI 会话中验证后的代码片段导出为 Markdown，写入 logs/session-md-{时间戳}/')
+  .option('-t, --tools <tools>', '要扫描的 AI 工具（claude,codex,... 或 all）', 'all')
+  .option('--verification <mode>', '验证模式（strict / relaxed / historical）', 'relaxed')
+  .option('-d, --directory <dir>', '仅包含该目录下的文件变更（如 src）')
+  .option('--since <date>', '仅导出该日期及之后的会话（YYYYMMDD 或 YYYY-MM-DD）')
+  .option('--op <ops>', '仅导出指定操作类型（edit / write / edit,write），默认仅 edit+write', 'edit,write')
+  .action(async (repoPath: string = '.', options) => {
+    if (typeof repoPath === 'object' && repoPath !== null) {
+      options = repoPath;
+      repoPath = '.';
+    }
+    manualParseSince(options);
+
+    const resolvedPath = path.resolve(repoPath);
+    if (!fs.existsSync(resolvedPath)) {
+      console.error(chalk.red(`Error: Path '${repoPath}' does not exist.`));
+      process.exit(1);
+    }
+
+    const tools = parseTools(options.tools);
+    const verificationMode = parseVerificationMode(options.verification);
+    const sinceDate = parseDate(options.since);
+
+    const filterOps = options.op && options.op !== 'all'
+      ? (options.op.split(',').map(o => o.trim()).filter(o => o === 'edit' || o === 'write') as ('edit' | 'write')[])
+      : undefined;
+
+    const baseText = 'Exporting AI sessions to Markdown...';
+    const spinner = startRainbowLoading(baseText);
+
+    try {
+      const analyzer = new ContributionAnalyzer(resolvedPath, verificationMode, options.directory, sinceDate);
+      const verifiedSessions = analyzer.getVerifiedSessions(tools, (filePath) => {
+        spinner.updateSecondary(filePath);
+      });
+      spinner.stop();
+
+      const result = exportVerifiedSessionsToMarkdown(verifiedSessions, resolvedPath, process.cwd(), { filterOperations: filterOps });
+
+      console.log(chalk.green(`已导出 ${verifiedSessions.length} 个会话`));
+      console.log(chalk.dim(`目录: ${result.outDir}`));
+      console.log(chalk.dim(`索引: ${result.indexPath}`));
+    } catch (error: unknown) {
+      spinner.fail('导出失败');
+      console.error(chalk.red('Error details:'));
+      if (error instanceof Error && error.stack) {
+        console.error(error.stack);
+      } else {
+        console.error(error);
+      }
+      process.exit(1);
+    }
   });
 
 // List command

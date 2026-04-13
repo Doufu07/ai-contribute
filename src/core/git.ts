@@ -525,6 +525,7 @@ export class GitAnalyzer {
       }
 
       // Inject untracked files into stats (new files not yet committed)
+      const fileDiffs = new Map<string, string>();
       this.injectUntrackedIntoStatsAndDiffs({
         fileStats,
         activeFiles,
@@ -595,30 +596,37 @@ export class GitAnalyzer {
   }
 
   /**
-   * Format Date to ISO string with local timezone offset
-   * This ensures Git interprets the time in the user's local timezone
-   * e.g., 2026-03-10T00:00:00+08:00 (Beijing time)
+   * Format Date to ISO string with UTC+8 timezone offset
+   * This ensures Git interprets the time consistently in Beijing timezone
+   * e.g., 2026-03-25T00:00:00+08:00
    */
   private formatLocalISO(date: Date): string {
-    const offset = date.getTimezoneOffset();
-    const offsetSign = offset <= 0 ? '+' : '-';
-    const offsetHours = Math.abs(Math.floor(offset / 60)).toString().padStart(2, '0');
-    const offsetMinutes = Math.abs(offset % 60).toString().padStart(2, '0');
+    // Always use UTC+8 (UTC+8 → offset = -480 minutes)
+    const utc8OffsetMinutes = -480;
+    const offsetSign = utc8OffsetMinutes <= 0 ? '+' : '-';
+    const offsetHours = Math.abs(Math.floor(utc8OffsetMinutes / 60)).toString().padStart(2, '0');
+    const offsetMinutes = Math.abs(utc8OffsetMinutes % 60).toString().padStart(2, '0');
     const offsetStr = `${offsetSign}${offsetHours}:${offsetMinutes}`;
 
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    const seconds = date.getSeconds().toString().padStart(2, '0');
+    // Convert from internal UTC representation to UTC+8 wall clock values
+    const utcMs = date.getTime();
+    const utc8Ms = utcMs - utc8OffsetMinutes * 60 * 1000;
+    const utc8Date = new Date(utc8Ms);
+
+    const year = utc8Date.getUTCFullYear();
+    const month = (utc8Date.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = utc8Date.getUTCDate().toString().padStart(2, '0');
+    const hours = utc8Date.getUTCHours().toString().padStart(2, '0');
+    const minutes = utc8Date.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = utc8Date.getUTCSeconds().toString().padStart(2, '0');
 
     return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${offsetStr}`;
   }
 
   private getGitBaseCommit(since: Date): string | null {
     try {
-      const result = execFileSync('git', ['rev-list', '-1', '--before=' + this.formatLocalISO(since), 'HEAD'], {
+      const formattedSince = this.formatLocalISO(since);
+      const result = execFileSync('git', ['rev-list', '-1', '--before=' + formattedSince, 'HEAD'], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],

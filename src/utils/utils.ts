@@ -19,25 +19,28 @@ export function isLineEmptyOrWhitespace(line: string): boolean {
 /**
  * Parse date string in various formats
  * Supports YYYYMMDDHHMM (12 digits), YYYYMMDD (8 digits), or standard Date string
+ * All date-only formats are interpreted in UTC+8 (Beijing time)
  */
 export function parseDate(dateStr: string | undefined): Date | undefined {
   if (!dateStr) return undefined;
-  
-  // Support YYYYMMDDHHMM format (12 digits)
+
+  // Support YYYYMMDDHHMM format (12 digits) — interpreted in UTC+8
   if (/^\d{12}$/.test(dateStr)) {
     const y = parseInt(dateStr.slice(0, 4), 10);
     const m = parseInt(dateStr.slice(4, 6), 10) - 1;
     const d = parseInt(dateStr.slice(6, 8), 10);
     const h = parseInt(dateStr.slice(8, 10), 10);
     const min = parseInt(dateStr.slice(10, 12), 10);
-    return new Date(y, m, d, h, min);
+    // UTC+8: local = UTC + 8h → UTC = local - 8h
+    return new Date(Date.UTC(y, m, d, h - 8, min));
   }
-  // Support YYYYMMDD format
+  // Support YYYYMMDD format — interpreted as start of day in UTC+8 (00:00 UTC+8)
   if (/^\d{8}$/.test(dateStr)) {
     const y = parseInt(dateStr.slice(0, 4), 10);
     const m = parseInt(dateStr.slice(4, 6), 10) - 1;
     const d = parseInt(dateStr.slice(6, 8), 10);
-    return new Date(y, m, d);
+    // 00:00 UTC+8 = 16:00 UTC previous day
+    return new Date(Date.UTC(y, m, d - 1, 16, 0, 0));
   }
   return new Date(dateStr);
 }

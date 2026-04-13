@@ -373,7 +373,12 @@ function manualParseSince(options: any) {
   const idx = args.indexOf('--since');
   if (idx !== -1 && idx < args.length - 1) {
     options.since = args[idx + 1];
-    // console.log('DEBUG: Manually parsed since:', options.since);
+  }
+  // Manually parse -d / --directory (workaround for Commander.js issue with default commands)
+  let dirIdx = args.indexOf('--directory');
+  if (dirIdx === -1) dirIdx = args.indexOf('-d');
+  if (dirIdx !== -1 && dirIdx < args.length - 1) {
+    options.directory = args[dirIdx + 1];
   }
 }
 

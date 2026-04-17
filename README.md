@@ -29,14 +29,14 @@ npx ai-contribute
 - 📈 **Visual Reports / 可视化报告**: Console, JSON, and Markdown output formats
 - 📅 **Timeline View / 时间线视图**: Track AI contributions over time (use `-v` or `history` command)
 - 📁 **File-level Analysis / 文件级分析**: See which files have the most AI contributions
-- 📂 **Directory Statistics / 目录统计**: Aggregate contribution stats by directory (use `-v` flag)
 - 🎯 **Directory Filter / 目录过滤**: Analyze only specific directories like `src` or `lib` (use `-d` flag)
-- ✅ **Verification Comparison / 验证对比**: Compare raw AI data vs verified contributions with pass rate
+- ✅ **Verification Comparison / 验证对比**: Compare raw AI data vs verified contributions
 - 📤 **Session Export / 会话导出**: Export verified AI sessions to Markdown with diffs (`export-sessions` command)
 - 🏷️ **Session Type Classification / 会话类型分类**: Classify sessions as code contribution, code review, analysis, or mixed
 - 📝 **Contribution Type Tracking / 贡献类型追踪**: Distinguish between AI-created files vs enhanced existing files
 - 📋 **Project Changes Analysis / 项目变更分析**: Show file-level git changes with --since flag
 - 🗂️ **Log File Generation / 日志文件生成**: Generate detailed log files with --log flag (`logs/ai-contributions-{timestamp}.log`, `logs/original-files-{timestamp}.log`)
+- 🔀 **Git Metadata Display / Git 信息显示**: Show current branch, username, and remote repo in reports
 
 ## Usage / 使用方法
 
@@ -145,7 +145,7 @@ npx ai-contribute export-sessions [path] [options]
 #   --verification <mode>   Verification mode (strict / relaxed / historical) / 验证模式
 #   -d, --directory <dir>   Only include file changes in this directory (e.g., src) / 仅包含该目录下的文件变更
 #   --since <date>          Only export sessions since date (YYYYMMDD or YYYY-MM-DD) / 仅导出该日期及之后的会话
-#   --op <ops>              Only export specified operation types (edit / write / edit,write), default: all / 仅导出指定操作类型
+#   --op <ops>              Only export specified operation types (edit / write / edit,write), default: edit,write / 仅导出指定操作类型
 
 # Examples / 示例:
 npx ai-contribute export-sessions
@@ -244,81 +244,90 @@ npx ai-contribute git-stat /path/to/repo --since 20260101 -d src
 
 ```
 AI 代码贡献分析
-代码库: /Users/xxx/project
-扫描时间: 2026/3/5 09:41:47
+代码库: ai-contribute.git
+当前分支: dev-1.3.0
+用户名称: Doufu07
+扫描时间: 2026/4/17 15:06:04
 验证模式: relaxed
-文件总数: 20
-代码总行数: 5577
+文件总数: 23
+代码总行数: 8009
 
 📊 AI 贡献统计
-┌────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ 指标   │ 原始数据 │ 新增代码 │ AI生成   │ AI贡献   │ AI生成占比│ 采纳率  │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 会话数 │ 5        │ -        │ 5        │ 5        │ -        │ 100.0%   │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 文件数 │ 13       │ -        │ 13       │ 10       │ 76.9%    │ 76.9%    │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 代码行数│ 1145     │ +1145    │ 1145     │ 727      │ 63.5%    │ 63.5%    │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 删除行 │ 710      │ -        │ 710      │ 448      │ -        │ -        │
-└────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+┌──────────┬──────────┬──────────┬────────┬────────┬────────────┐
+│ 指标     │ 原始数据 │ 新增代码 │ AI生成 │ AI贡献 │ AI生成占比 │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 会话数   │ 85       │ -        │ 85     │ 27     │ -          │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 文件数   │ 18       │ -        │ 34     │ 15     │ 83.3%      │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 代码行数 │ 7499     │ +1629    │ 5659   │ 803    │ 49.3%      │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 删除行   │ 279      │ -        │ 1451   │ 876    │ -          │
+└──────────┴──────────┴──────────┴────────┴────────┴────────────┘
 
 📊 会话类型统计
-┌──────────┬────────┬──────────────────────────┐
-│ 类型     │ 会话数 │ 说明                     │
-├──────────┼────────┼──────────────────────────┤
-│ 代码贡献 │ 3      │ 修改或创建了项目代码      │
-├──────────┼────────┼──────────────────────────┤
-│ 问题分析 │ 2      │ 调试、搜索、运行命令等    │
-└──────────┴────────┴──────────────────────────┘
+┌──────────┬────────┬────────────────────────┐
+│ 类型     │ 会话数 │ 说明                   │
+├──────────┼────────┼────────────────────────┤
+│ 代码贡献 │ 43     │ 修改或创建了项目代码   │
+├──────────┼────────┼────────────────────────┤
+│ 代码审查 │ 9      │ 只读取文件，未做修改   │
+├──────────┼────────┼────────────────────────┤
+│ 问题分析 │ 3      │ 调试、搜索、运行命令等 │
+├──────────┼────────┼────────────────────────┤
+│ 混合操作 │ 30     │ 多种操作但无代码变更   │
+└──────────┴────────┴────────────────────────┘
 
 🤖 各 AI 工具贡献明细
 ┌────────────────────┬────────┬────────┬──────────┬──────────┬─────────────────┐
 │ 工具/模型          │ 会话数 │ 文件数 │ 新增行数 │ 删除行数 │ 占比            │
 ├────────────────────┼────────┼────────┼──────────┼──────────┼─────────────────┤
-│ Trae               │ 1      │ 2      │ +1042    │ -0       │ 86.1%           │
+│ Claude Code        │ 27     │ 15     │ +803     │ -876     │ 49.3%           │
 ├────────────────────┼────────┼────────┼──────────┼──────────┼─────────────────┤
-│ Claude Code        │ 1      │ 4      │ +168     │ -94      │ 13.9%           │
+│   └─ kimi-for-coding│ 17     │ 15     │ +325     │ -345     │ 40.5% (工具内)  │
+├────────────────────┼────────┼────────┼──────────┼──────────┼─────────────────┤
+│   └─ claude-opus-4-7│ 5      │ 3      │ +286     │ -386     │ 35.6% (工具内)  │
 └────────────────────┴────────┴────────┴──────────┴──────────┴─────────────────┘
 
 📈 贡献分布
 
   ████████████████████████████████████████████████████████████
 
-  ● Trae            17.4%  (969 行)
-  ● Claude Code      2.8%  (156 行)
-  ● 未知/人工           79.8%  (4452 行)
+  ● Claude Code     49.3%  (803 行)
+  ● 未知/人工           50.7%  (826 行)
 
 📁 AI 贡献最多的文件
-┌──────────────────────────────┬──────────┬──────────┬──────────┬──────────┬──────────┬─────────────────┐
-│ 文件                         │ 原始数据 │ 新增代码 │ AI 贡献  │ 会话数   │ 类型     │ 贡献者详情       │
-├──────────────────────────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────────────┤
-│ src/analyzer.ts              │ 656      │ +656     │ 656 100.0%│ 2       │ 新增     │ Trae, Claude    │
-├──────────────────────────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────────────┤
-│ src/scanners/trae.ts         │ 386      │ +386     │ 386 100.0%│ 1       │ 新增     │ Claude Code     │
-└──────────────────────────────┴──────────┴──────────┴──────────┴──────────┴──────────┴─────────────────┘
+┌──────────────────────────────┬──────────┬──────────┬───────────────┬────────┬────────┬──────────────────────────────┐
+│ 文件                         │ 原始数据 │ 新增代码 │ AI 贡献       │ 会话数 │ 类型   │ 贡献者详情                   │
+├──────────────────────────────┼──────────┼──────────┼───────────────┼────────┼────────┼──────────────────────────────┤
+│ src/analyzer.ts              │ 841      │ +291     │ 291 (100.0%)  │ 6      │ 优化   │ Claude Code                  │
+├──────────────────────────────┼──────────┼──────────┼───────────────┼────────┼────────┼──────────────────────────────┤
+│ src/reporter.ts              │ 719      │ +47      │ 37 (78.7%)    │ 7      │ 优化   │ Claude Code                  │
+├──────────────────────────────┼──────────┼──────────┼───────────────┼────────┼────────┼──────────────────────────────┤
+│ src/core/git.ts              │ 1359     │ +748     │ 418 (55.9%)   │ 9      │ 优化   │ Claude Code                  │
+└──────────────────────────────┴──────────┴──────────┴───────────────┴────────┴────────┴──────────────────────────────┘
 
 📅 近期 AI 活动
-┌──────────────────┬────────────────────┬────────┬──────────┐
-│ 时间             │ 工具/模型           │ 文件数 │ 变更     │
-├──────────────────┼────────────────────┼────────┼──────────┤
-│ 2026/03/02 13:02│ Trae                │ 2      │ +1153 -0 │
-├──────────────────┼────────────────────┼────────┼──────────┤
-│ 2026/03/02 11:07│ Claude Code          │ 4      │ +168 -94 │
-└──────────────────┴────────────────────┴────────┴──────────┘
+┌──────────────────┬─────────────────────────────┬────────┬───────────┐
+│ 时间             │ 工具/模型                   │ 文件数 │ 变更      │
+├──────────────────┼─────────────────────────────┼────────┼───────────┤
+│ 2026/04/17 14:57 │ Claude Code Kimi-for-coding │ 3      │ +25 -0    │
+├──────────────────┼─────────────────────────────┼────────┼───────────┤
+│ 2026/04/17 14:55 │ Claude Code Kimi-for-coding │ 1      │ +2 -2     │
+└──────────────────┴─────────────────────────────┴────────┴───────────┘
 ```
 
 ## Supported AI Tools / 支持的 AI 工具
 
 
-| Tool        | Storage Location                                             | Format                 |
-| ----------- | ------------------------------------------------------------ | ---------------------- |
-| Claude Code | `~/.claude/projects/<path>/`                                 | JSONL                  |
-| Codex CLI   | `~/.codex/sessions/YYYY/MM/DD/`                              | JSONL                  |
-| Cursor      | `~/Library/Application Support/Cursor/User/workspaceStorage` | SQLite (`state.vscdb`) |
-| Gemini CLI  | `~/.gemini/tmp/<hash>/chats/`                                | JSON                   |
-| Opencode    | `~/.local/share/opencode/`                                   | JSON                   |
-| Trae        | `~/Library/Application Support/Trae/User/workspaceStorage`   | SQLite (`state.vscdb`) |
+| Tool        | Storage Location                        | Format                 |
+| ----------- | --------------------------------------- | ---------------------- |
+| Claude Code | `~/.claude/projects/<path>/`            | JSONL                  |
+| Codex CLI   | `~/.codex/sessions/YYYY/MM/DD/`         | JSONL                  |
+| Cursor      | `Cursor/User/workspaceStorage`          | SQLite (`state.vscdb`) |
+| Gemini CLI  | `~/.gemini/tmp/<hash>/chats/`           | JSON                   |
+| Opencode    | `~/.local/share/opencode/`              | JSON                   |
+| Trae        | `Trae/User/workspaceStorage`            | SQLite (`state.vscdb`) |
 
 
 ## How It Works
@@ -408,15 +417,17 @@ The tool shows a comparison between **raw AI session data** and **verified contr
 
 ```
 📊 AI 贡献统计
-┌────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ 指标   │ 原始数据 │ 新增代码 │ AI生成   │ AI贡献   │ AI生成占比│ 采纳率  │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 会话数 │ 5        │ -        │ 5        │ 5        │ -        │ 100.0%   │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 文件数 │ 13       │ -        │ 13       │ 10       │ 76.9%    │ 76.9%    │
-├────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ 代码行数│ 1145     │ +1145    │ 1145     │ 727      │ 63.5%    │ 63.5%    │
-└────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+┌──────────┬──────────┬──────────┬────────┬────────┬────────────┐
+│ 指标     │ 原始数据 │ 新增代码 │ AI生成 │ AI贡献 │ AI生成占比 │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 会话数   │ 5        │ -        │ 5      │ 5      │ -          │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 文件数   │ 13       │ -        │ 13     │ 10     │ 76.9%      │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 代码行数 │ 1145     │ +1145    │ 1145   │ 727    │ 63.5%      │
+├──────────┼──────────┼──────────┼────────┼────────┼────────────┤
+│ 删除行   │ 710      │ -        │ 710    │ 448    │ -          │
+└──────────┴──────────┴──────────┴────────┴────────┴────────────┘
 ```
 
 **What causes the difference? / 差异原因:**
@@ -430,11 +441,11 @@ The tool shows a comparison between **raw AI session data** and **verified contr
 | File renamed/moved | Cannot verify contributions to moved files       |
 
 
-**Pass rate interpretation / 通过率解读:**
+**AI generation share interpretation / AI 生成占比解读:**
 
-- **100%**: All AI contributions still exist in codebase
-- **< 100%**: Some contributions were modified/removed
-- **Low pass rate**: Code has been heavily modified since AI contributions
+- **100%**: All code in the analyzed scope was generated by AI
+- **< 100%**: A portion of the code was written by humans or other sources
+- **Low share**: AI played a smaller role in the codebase changes
 
 ## Limitations
 
@@ -454,8 +465,9 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 1. Create a new scanner in `src/scanners/`
 2. Extend the `BaseScanner` class
 3. Implement `tool`, `storagePath`, `scan()`, and `parseSessionFile()` methods
-4. Add the scanner to `analyzer.ts` and register in `ScannerManager`
-5. Add tool display name/color/path in `cli.ts` and `reporter.ts`
+4. Add the tool to the `AITool` enum in `src/types.ts`
+5. Register the scanner in `src/core/scanners.ts` (`ScannerManager` constructor)
+6. Add tool display name, color, and storage path in `src/cli.ts` and `src/reporter.ts`
 
 ## License
 

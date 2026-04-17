@@ -399,7 +399,7 @@ program
   .option('--verification <mode>', 'Verification mode (strict, relaxed, historical)', 'relaxed')
   .option('-d, --directory <dir>', 'Only analyze files in specific directory (e.g., src, lib)')
   .option('--since <date>', 'Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD)')
-  .option('-v, --verbose', 'Show detailed output including files and timeline')
+  .option('-v, --verbose', 'Show detailed output including files and timeline', true)
   .option('--log', 'Generate a detailed log file of AI contributions')
   .action(async (repoPath: string = '.', options) => {
     // Check if repoPath is actually options (when no path argument is provided)
@@ -756,7 +756,7 @@ program
   .option('--verification <mode>', 'Verification mode (strict, relaxed, historical)', 'relaxed')
   .option('-d, --directory <dir>', 'Only analyze files in specific directory (e.g., src, lib)')
   .option('--since <date>', 'Only analyze contributions since date (YYYYMMDD or YYYY-MM-DD)')
-  .option('-v, --verbose', 'Show detailed output')
+  .option('-v, --verbose', 'Show detailed output', true)
   .option('--log', 'Generate a detailed log file of AI contributions')
   .action(async (repoPath: string, options) => {
     manualParseSince(options);

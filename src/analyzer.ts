@@ -190,9 +190,31 @@ export class ContributionAnalyzer {
       }
     }
 
+    // Get project changes for potential scaling
+    const projectChanges = this.since ? this.gitAnalyzer.getProjectChanges(this.since, this.targetDirectory) : undefined;
+
+    // ============================================================================
+    // TODO [临时代码 - 删除标记 1/2]: AI 贡献上限截断逻辑调用
+    // 预期在 1-2 个迭代内完成根因修复后删除此段代码
+    // 对应的函数定义见下方 applyContributionCapping() 方法（删除标记 2/2）
+    // ============================================================================
+    if (projectChanges && projectChanges.linesAdded > 0) {
+      const result = this.applyContributionCapping(projectChanges, byFile, byTool, repoFiles);
+      aiTouchedFiles = result.aiTouchedFiles;
+      aiContributedLines = result.aiContributedLines;
+    }
+    // ============================================================================
+    // TODO [临时代码 - 删除标记 1/2 结束]
+    // ============================================================================
+
+    const gitInfo = this.gitAnalyzer.getGitInfo();
+
     return {
       repoPath: this.projectPath,
       repoUrl: this.gitAnalyzer.getRepoUrl(),
+      gitBranch: gitInfo.branch,
+      gitUsername: gitInfo.username,
+      gitEmail: gitInfo.email,
       scanTime: new Date(),
       verificationMode: this.verificationMode,
       targetDirectory: this.targetDirectory,
@@ -221,9 +243,255 @@ export class ContributionAnalyzer {
       byFile,
       rawStats,
       sessionTypeStats: this.computeSessionTypeStats(sessions),
-      projectChanges: this.since ? this.gitAnalyzer.getProjectChanges(this.since, this.targetDirectory) : undefined,
+      projectChanges,
     };
   }
+
+  // ============================================================================
+  // TODO [临时代码 - 删除标记 2/2]: AI 贡献上限截断逻辑函数定义
+  // 预期在 1-2 个迭代内完成根因修复后删除整个 applyContributionCapping() 方法
+  // 对应的调用点见上方 analyze() 方法中（删除标记 1/2）
+  // ============================================================================
+  /**
+   * TODO [短期止血方案]: AI 贡献上限截断逻辑
+   *
+   * 这是一个临时修正方案，用于防止 AI 贡献行数超过 Git 统计新增行数导致的 >100% 异常值
+   * 根本原因是 Scanner 在全文件重写、基线缺失等场景下会过度上报 addedLines
+   * 长期方案应该是修复 Scanner 的过度计算问题（见 docs/git-first-architecture.md）
+   *
+   * 优化策略：
+   * 1. 先在文件级别截断：每个文件的 AI 贡献不超过该文件的 Git 新增行数
+   * 2. 再在全局级别截断：总 AI 贡献不超过 Git 总新增行数
+   *
+   * 预期在 1-2 个迭代内完成根因修复后移除此方法
+   *
+   * @param projectChanges Git 统计的项目变更信息
+   * @param byFile 文件级别的统计数据（会被修改）
+   * @param byTool 工具级别的统计数据（会被修改）
+   * @param repoFiles 仓库中的文件列表
+   * @returns 重新计算后的全局 AI 贡献统计
+   */
+  private applyContributionCapping(
+    projectChanges: { linesAdded: number; fileStats: Map<string, { added: number }> },
+    byFile: Map<string, FileStats>,
+    byTool: Map<AITool, ToolStats>,
+    repoFiles: string[]
+  ): { aiTouchedFiles: number; aiContributedLines: number } {
+    // 步骤 1: 文件级别截断
+    // 对于每个文件，如果 AI 贡献 > Git 新增，则截断为 Git 新增
+    const fileScaleMap = new Map<string, number>(); // 记录每个文件的缩放比例
+
+    for (const [filePath, fileStats] of byFile) {
+      if (fileStats.aiContributedLines > 0) {
+        const gitFileStats = projectChanges.fileStats.get(filePath);
+        if (gitFileStats && gitFileStats.added > 0) {
+          // 该文件在 Git 中有新增行数
+          if (fileStats.aiContributedLines > gitFileStats.added) {
+            // AI 贡献超过了 Git 新增，需要截断
+            const fileScale = gitFileStats.added / fileStats.aiContributedLines;
+            fileScaleMap.set(filePath, fileScale);
+
+            if (process.env.DEBUG) {
+              console.warn(`⚠️  文件 ${filePath} 的 AI 贡献被截断:`);
+              console.warn(`   原始 AI 贡献: ${fileStats.aiContributedLines} 行`);
+              console.warn(`   Git 新增: ${gitFileStats.added} 行`);
+              console.warn(`   截断比例: ${fileScale.toFixed(3)}`);
+            }
+
+            fileStats.aiContributedLines = gitFileStats.added;
+
+            // 重新计算比例
+            if (fileStats.totalLines > 0) {
+              fileStats.aiContributionRatio = Math.min(
+                fileStats.aiContributedLines / fileStats.totalLines,
+                1.0
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 步骤 2: 如果有文件被截断，需要重新计算 byTool 和 byModel
+    if (fileScaleMap.size > 0) {
+      // 保存原始的模型比例（在清零之前）
+      const modelRatios = new Map<AITool, Map<string, number>>();
+      for (const [tool, toolStats] of byTool) {
+        const toolTotal = toolStats.linesAdded;
+        if (toolTotal > 0) {
+          const ratios = new Map<string, number>();
+          for (const [modelName, modelStats] of toolStats.byModel) {
+            ratios.set(modelName, modelStats.linesAdded / toolTotal);
+          }
+          modelRatios.set(tool, ratios);
+        }
+      }
+
+      // 重新计算 byTool 统计（基于截断后的 byFile）
+      // 清空 linesAdded，重新从 byFile 累加
+      for (const [, toolStats] of byTool) {
+        toolStats.linesAdded = 0;
+        for (const [, modelStats] of toolStats.byModel) {
+          modelStats.linesAdded = 0;
+        }
+      }
+
+      // 从 byFile 重新累加（使用截断后的值）
+      for (const [, fileStats] of byFile) {
+        if (fileStats.aiContributedLines > 0) {
+          // 按比例分配到各个工具
+          const toolEntries = Array.from(fileStats.contributions.entries());
+          const totalFileContribution = toolEntries.reduce((sum, [, c]) => sum + c, 0);
+          let remainingLinesInFile = fileStats.aiContributedLines;
+
+          for (let i = 0; i < toolEntries.length; i++) {
+            const [tool, toolContribution] = toolEntries[i];
+            const toolStats = byTool.get(tool);
+
+            if (toolStats) {
+              if (i === toolEntries.length - 1) {
+                // 最后一个工具：分配剩余的所有行数
+                toolStats.linesAdded += remainingLinesInFile;
+              } else {
+                // 其他工具：按比例分配
+                const toolRatio = totalFileContribution > 0 ? toolContribution / totalFileContribution : 0;
+                const toolLinesInFile = Math.floor(fileStats.aiContributedLines * toolRatio);
+                toolStats.linesAdded += toolLinesInFile;
+                remainingLinesInFile -= toolLinesInFile;
+              }
+            }
+          }
+        }
+      }
+
+      // 重新计算 netLines 和 byModel
+      for (const [tool, toolStats] of byTool) {
+        toolStats.netLines = toolStats.linesAdded - toolStats.linesRemoved;
+
+        // 使用保存的原始比例重新分配 byModel
+        const ratios = modelRatios.get(tool);
+        if (ratios && ratios.size > 0 && toolStats.linesAdded > 0) {
+          const modelEntries = Array.from(toolStats.byModel.entries());
+          let remainingLines = toolStats.linesAdded;
+
+          // 按比例分配，最后一个模型分配剩余的所有行数（避免精度损失）
+          for (let i = 0; i < modelEntries.length; i++) {
+            const [modelName, modelStats] = modelEntries[i];
+            const ratio = ratios.get(modelName) || 0;
+
+            if (i === modelEntries.length - 1) {
+              // 最后一个模型：分配剩余的所有行数
+              modelStats.linesAdded = remainingLines;
+            } else {
+              // 其他模型：按比例分配
+              const allocatedLines = Math.floor(toolStats.linesAdded * ratio);
+              modelStats.linesAdded = allocatedLines;
+              remainingLines -= allocatedLines;
+            }
+
+            modelStats.netLines = modelStats.linesAdded - modelStats.linesRemoved;
+          }
+        }
+      }
+
+      if (process.env.DEBUG) {
+        console.warn(`⚠️  文件级截断后重新计算了 byTool 统计`);
+      }
+    }
+
+    // 步骤 3: 重新汇总全局 AI 贡献
+    let aiTouchedFiles = 0;
+    let aiContributedLines = 0;
+    for (const [filePath, fileStats] of byFile) {
+      if (fileStats.aiContributedLines > 0 && repoFiles.includes(filePath)) {
+        aiTouchedFiles++;
+        aiContributedLines += Math.min(fileStats.aiContributedLines, fileStats.totalLines);
+      }
+    }
+
+    // 步骤 4: 全局级别截断（如果文件级截断后仍然超标）
+    if (aiContributedLines > projectChanges.linesAdded) {
+      const globalScale = projectChanges.linesAdded / aiContributedLines;
+
+      if (process.env.DEBUG) {
+        console.warn(`⚠️  全局 AI 贡献被缩放了 ${((1 - globalScale) * 100).toFixed(1)}%`);
+        console.warn(`   原始 AI 贡献: ${aiContributedLines} 行`);
+        console.warn(`   Git 新增代码: ${projectChanges.linesAdded} 行`);
+        console.warn(`   缩放比例: ${globalScale.toFixed(3)}`);
+      }
+
+      // 4.1 缩放 byFile 层级
+      for (const [, fileStats] of byFile) {
+        if (fileStats.aiContributedLines > 0) {
+          const originalLines = fileStats.aiContributedLines;
+          fileStats.aiContributedLines = Math.max(1, Math.floor(originalLines * globalScale));
+
+          // 重新计算比例，确保不超过 100%
+          if (fileStats.totalLines > 0) {
+            fileStats.aiContributionRatio = Math.min(
+              fileStats.aiContributedLines / fileStats.totalLines,
+              1.0
+            );
+          }
+        }
+      }
+
+      // 4.2 缩放 byTool 层级
+      for (const [, toolStats] of byTool) {
+        if (toolStats.linesAdded > 0) {
+          const originalToolLines = toolStats.linesAdded;
+          toolStats.linesAdded = Math.max(1, Math.floor(toolStats.linesAdded * globalScale));
+          toolStats.netLines = toolStats.linesAdded - toolStats.linesRemoved;
+
+          // 4.3 缩放 byModel 层级（确保总和一致）
+          const modelEntries = Array.from(toolStats.byModel.entries());
+          if (modelEntries.length > 0) {
+            let remainingLines = toolStats.linesAdded;
+
+            // 按比例分配，最后一个模型分配剩余的所有行数
+            for (let i = 0; i < modelEntries.length; i++) {
+              const [, modelStats] = modelEntries[i];
+
+              if (modelStats.linesAdded > 0) {
+                if (i === modelEntries.length - 1) {
+                  // 最后一个模型：分配剩余的所有行数
+                  modelStats.linesAdded = Math.max(1, remainingLines);
+                } else {
+                  // 其他模型：按比例分配
+                  const modelRatio = modelStats.linesAdded / originalToolLines;
+                  const allocatedLines = Math.max(1, Math.floor(toolStats.linesAdded * modelRatio));
+                  modelStats.linesAdded = allocatedLines;
+                  remainingLines -= allocatedLines;
+                }
+
+                modelStats.netLines = modelStats.linesAdded - modelStats.linesRemoved;
+              }
+            }
+          }
+        }
+      }
+
+      // 4.4 重新汇总全局指标
+      aiTouchedFiles = 0;
+      aiContributedLines = 0;
+      for (const [filePath, fileStats] of byFile) {
+        if (fileStats.aiContributedLines > 0 && repoFiles.includes(filePath)) {
+          aiTouchedFiles++;
+          aiContributedLines += Math.min(fileStats.aiContributedLines, fileStats.totalLines);
+        }
+      }
+
+      // 4.5 最终兜底：确保不超过 Git 统计值
+      if (aiContributedLines > projectChanges.linesAdded) {
+        aiContributedLines = projectChanges.linesAdded;
+      }
+    }
+
+    return { aiTouchedFiles, aiContributedLines };
+  }
+  // ============================================================================
+  // TODO [临时代码 - 删除标记 2/2 结束]
+  // ============================================================================
 
   /**
    * 扫描并验证会话，供按会话导出 Markdown 等场景使用（不构建完整 ContributionStats）
@@ -653,14 +921,22 @@ export class ContributionAnalyzer {
     }
 
     // Calculate ratios - cap at 100%
+    // TODO [短期止血]: 确保单文件级别的 AI 贡献比例不超过 100%
+    // 这里处理两种异常情况：
+    // 1. aiContributedLines > totalLines（Scanner 过度上报）
+    // 2. totalLines = 0 但 aiContributedLines > 0（文件已删除或不在 repo 中）
     for (const [, fileStats] of stats) {
       if (fileStats.totalLines > 0) {
+        // 先截断 AI 贡献行数，不能超过文件总行数
         fileStats.aiContributedLines = Math.min(fileStats.aiContributedLines, fileStats.totalLines);
+        // 再计算比例，确保不超过 100%
         fileStats.aiContributionRatio = Math.min(
           fileStats.aiContributedLines / fileStats.totalLines,
           1.0
         );
       } else if (fileStats.aiContributedLines > 0) {
+        // 文件总行数为 0 但有 AI 贡献（文件已删除或不存在）
+        // 将比例设为 0，避免除以 0 或显示异常值
         fileStats.aiContributionRatio = 0;
       }
 

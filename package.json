@@ -1,6 +1,6 @@
 {
   "name": "ai-contribute",
-  "version": "1.3.0-alpha.2",
+  "version": "1.3.0-alpha.3",
   "description": "CLI tool to track and analyze AI coding assistants' contributions in your codebase",
   "main": "dist/cli.js",
   "bin": {

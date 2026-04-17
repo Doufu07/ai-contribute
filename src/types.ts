@@ -148,6 +148,9 @@ export interface SessionTypeStats {
 export interface ContributionStats {
   repoPath: string;
   repoUrl?: string; // Git remote URL if available
+  gitBranch?: string;
+  gitUsername?: string;
+  gitEmail?: string;
   scanTime: Date;
   verificationMode: VerificationMode;
   targetDirectory?: string;

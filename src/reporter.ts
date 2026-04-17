@@ -28,6 +28,19 @@ const TOOL_COLORS: Record<AITool, typeof chalk> = {
   [AITool.TRAE]: chalk.hex('#5D5FEF'),
 };
 
+function getRepoName(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    const basename = path.posix.basename(parsed.pathname);
+    return basename || undefined;
+  } catch {
+    const parts = url.split(/[:/]/);
+    const last = parts[parts.length - 1];
+    return last || url;
+  }
+}
+
 /**
  * Console reporter for terminal output
  */
@@ -61,7 +74,13 @@ export class ConsoleReporter {
 
     console.log();
     console.log(chalk.bold(title));
-    console.log(`代码库: ${stats.repoUrl || stats.repoPath}`);
+    console.log(`代码库: ${getRepoName(stats.repoUrl) || stats.repoPath}`);
+    if (stats.gitBranch) {
+      console.log(`当前分支: ${stats.gitBranch}`);
+    }
+    if (stats.gitUsername) {
+      console.log(`用户名称: ${stats.gitUsername}`);
+    }
     if (stats.targetDirectory) {
       console.log(`目标目录: ${stats.targetDirectory}`);
     }
@@ -79,7 +98,7 @@ export class ConsoleReporter {
     console.log(chalk.bold('📊 AI 贡献统计'));
 
     const table = new Table({
-      head: ['指标', '原始数据', '新增代码', 'AI生成', 'AI贡献', 'AI生成占比', '采纳率'].map(h => chalk.bold(h)),
+      head: ['指标', '原始数据', '新增代码', 'AI生成', 'AI贡献', 'AI生成占比'].map(h => chalk.bold(h)),
       style: { head: [], border: [] },
     });
 
@@ -129,18 +148,6 @@ export class ConsoleReporter {
 
     // Calculate pass rates (Adoption Rate = Verified / Raw)
     // Reverting to Verified / Raw as per user request "采纳率 还是AI贡献/变动数据"
-    const sessionPassRate = raw.sessionsCount > 0
-      ? ((verifiedSessions / raw.sessionsCount) * 100).toFixed(1) + '%'
-      : '-';
-
-    const filePassRate = raw.totalFiles > 0
-      ? ((verifiedFiles / raw.totalFiles) * 100).toFixed(1) + '%'
-      : '-';
-
-    const linePassRate = raw.linesAdded > 0
-      ? ((verifiedLines / raw.linesAdded) * 100).toFixed(1) + '%'
-      : '-';
-
     // Calculate AI Generation Share (AI Contribution / Original Data)
     let originalFiles = stats.projectTotalFiles ?? stats.totalFiles;
     let originalLines = stats.projectTotalLines ?? stats.totalLines;
@@ -182,10 +189,10 @@ export class ConsoleReporter {
     }
     
     table.push(
-      ['会话数', raw.sessionsCount.toString(), '-', raw.sessionsCount.toString(), verifiedSessions.toString(), '-', sessionPassRate],
-      ['文件数', rawFilesDisplay, '-', changeFilesDisplay, contribFilesDisplay, fileShare, filePassRate],
-      ['代码行数', rawLinesDisplay, rawNetDisplay, changeLinesDisplay, contribLinesDisplay, lineShare, linePassRate],
-      ['删除行', rawDeletedDisplay, '-', changeDeletedDisplay, contribDeletedDisplay, '-', '-'],
+      ['会话数', raw.sessionsCount.toString(), '-', raw.sessionsCount.toString(), verifiedSessions.toString(), '-'],
+      ['文件数', rawFilesDisplay, '-', changeFilesDisplay, contribFilesDisplay, fileShare],
+      ['代码行数', rawLinesDisplay, rawNetDisplay, changeLinesDisplay, contribLinesDisplay, lineShare],
+      ['删除行', rawDeletedDisplay, '-', changeDeletedDisplay, contribDeletedDisplay, '-'],
     );
 
     console.log(table.toString());
@@ -215,15 +222,18 @@ export class ConsoleReporter {
       style: { head: [], border: [] },
     });
 
-    const totalLines = Array.from(stats.byTool.values())
-      .reduce((sum, t) => sum + t.linesAdded, 0);
+    // 占比采用新增代码总量进行计算
+    let totalBaseLines = stats.projectTotalLines ?? stats.totalLines;
+    if (stats.projectChanges) {
+      totalBaseLines = stats.projectChanges.linesAdded;
+    }
 
     const sortedTools = Array.from(stats.byTool.entries())
       .sort((a, b) => b[1].linesAdded - a[1].linesAdded);
 
     for (const [tool, toolStats] of sortedTools) {
-      const share = totalLines > 0
-        ? ((toolStats.linesAdded / totalLines) * 100).toFixed(1)
+      const share = totalBaseLines > 0
+        ? ((toolStats.linesAdded / totalBaseLines) * 100).toFixed(1)
         : '0.0';
       const color = TOOL_COLORS[tool] || chalk.white;
 
@@ -645,6 +655,9 @@ export class JsonReporter {
   generate(stats: ContributionStats): string {
     const output = {
       repo_path: stats.repoPath,
+      repo_url: stats.repoUrl || null,
+      git_branch: stats.gitBranch || null,
+      git_username: stats.gitUsername || null,
       target_directory: stats.targetDirectory || null,
       scan_time: stats.scanTime.toISOString(),
       verification_mode: stats.verificationMode,
@@ -721,7 +734,13 @@ export class MarkdownReporter {
 
     lines.push('# AI Contribution Report');
     lines.push('');
-    lines.push(`**Repository:** \`${stats.repoPath}\``);
+    lines.push(`**Repository:** \`${getRepoName(stats.repoUrl) || stats.repoPath}\``);
+    if (stats.gitBranch) {
+      lines.push(`**Branch:** \`${stats.gitBranch}\``);
+    }
+    if (stats.gitUsername) {
+      lines.push(`**User:** \`${stats.gitUsername}\``);
+    }
     if (stats.targetDirectory) {
       lines.push(`**Directory:** \`${stats.targetDirectory}\``);
     }
@@ -754,14 +773,15 @@ export class MarkdownReporter {
       lines.push('| Tool | Sessions | Files | Lines Added | Lines Removed | Share |');
       lines.push('|------|----------|-------|-------------|---------------|-------|');
 
-      const totalLines = Array.from(stats.byTool.values())
-        .reduce((sum, t) => sum + t.linesAdded, 0);
+      const totalBaseLines = stats.projectChanges
+        ? stats.projectChanges.linesAdded
+        : (stats.projectTotalLines ?? stats.totalLines);
 
       const sortedTools = Array.from(stats.byTool.entries())
         .sort((a, b) => b[1].linesAdded - a[1].linesAdded);
       for (const [tool, toolStats] of sortedTools) {
-        const share = totalLines > 0 
-          ? ((toolStats.linesAdded / totalLines) * 100).toFixed(1) 
+        const share = totalBaseLines > 0
+          ? ((toolStats.linesAdded / totalBaseLines) * 100).toFixed(1)
           : '0.0';
 
         lines.push(

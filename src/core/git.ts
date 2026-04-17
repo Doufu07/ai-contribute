@@ -106,10 +106,94 @@ export class GitAnalyzer {
   }
 
   /**
+   * Get project path relative to git repo root
+   */
+  private getProjectRelativeToRepo(): string | null {
+    const repoRoot = this.getGitRepoRoot();
+    if (!repoRoot) return null;
+    const relativeRoot = path.relative(repoRoot, this.projectPath);
+    return this.normalizePathSegment(relativeRoot);
+  }
+
+  /**
+   * Convert a repo-relative path to project-relative path.
+   * Returns null if the file is outside the current projectPath scope.
+   */
+  private toProjectRelativePath(repoRelativePath: string): string | null {
+    const projectRelativeToRepo = this.getProjectRelativeToRepo();
+    if (!projectRelativeToRepo) {
+      return this.toForwardSlash(repoRelativePath);
+    }
+    const normalized = this.toForwardSlash(repoRelativePath);
+    const prefix = projectRelativeToRepo + '/';
+    if (normalized === projectRelativeToRepo) {
+      return '';
+    }
+    if (normalized.startsWith(prefix)) {
+      return normalized.slice(prefix.length);
+    }
+    return null;
+  }
+
+  /**
+   * Resolve user-provided target directory to a project-relative prefix.
+   * Returns undefined if the directory is outside the current projectPath scope.
+   */
+  resolveTargetDirectory(targetDirectory?: string): string | undefined {
+    if (!targetDirectory) return undefined;
+    const projectRelativeToRepo = this.getProjectRelativeToRepo();
+    if (!projectRelativeToRepo) {
+      return this.toForwardSlash(targetDirectory);
+    }
+    const normalizedTarget = this.toForwardSlash(targetDirectory).replace(/\/+$/, '');
+    const normalizedProject = projectRelativeToRepo;
+
+    if (normalizedTarget === normalizedProject || normalizedProject.startsWith(normalizedTarget + '/')) {
+      // targetDirectory is an ancestor of (or equal to) projectPath
+      // → projectPath is fully inside the target scope, so match all project-relative files
+      return '';
+    }
+
+    if (normalizedTarget.startsWith(normalizedProject + '/')) {
+      // targetDirectory is a descendant of projectPath
+      // → return the sub-path within projectPath
+      return normalizedTarget.slice(normalizedProject.length + 1);
+    }
+
+    // Fallback: treat targetDirectory as a project-relative sub-directory.
+    // This allows running from src/ with -d core to match src/core/.
+    return normalizedTarget;
+  }
+
+  /**
+   * Resolve a project-relative file path to an absolute path for reading.
+   */
+  private resolveProjectFilePath(filePath: string): string {
+    return path.resolve(this.projectPath, filePath);
+  }
+
+  /**
    * Get project changes since a specific time using Git-First strategy
    * 使用 Git 优先策略获取自指定时间以来的项目变更
    */
   getProjectChanges(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    const resolvedTarget = this.resolveTargetDirectory(targetDirectory);
+    if (targetDirectory && resolvedTarget === undefined) {
+      // Target directory is outside the current projectPath scope
+      return {
+        totalFiles: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        netLinesAdded: 0,
+        totalLinesOfChangedFiles: 0,
+        files: [],
+        fileStats: new Map(),
+        fileDiffs: new Map(),
+        emptyLinesAdded: 0,
+        emptyLinesRemoved: 0,
+      };
+    }
+
     // 1. Check Git reliability first
     // 1. 首先检查 Git 是否可靠
     if (!this.isGitReliable()) {
@@ -149,7 +233,7 @@ export class GitAnalyzer {
         for (const [filePath, stats] of gitChangesMap.entries()) {
             // Filter by target directory if set
             // 如果设置了目标目录，则进行过滤
-            if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
+            if (resolvedTarget !== undefined && !this.isInTargetDirectory(filePath, resolvedTarget)) {
                 continue;
             }
 
@@ -174,7 +258,7 @@ export class GitAnalyzer {
 
             // If file exists in working tree, get current lines
             // 如果文件存在于工作目录，获取当前行数
-            const fullPath = path.resolve(this.projectPath, filePath);
+            const fullPath = this.resolveProjectFilePath(filePath);
             if (fs.existsSync(fullPath)) {
                 try {
                     const content = fs.readFileSync(fullPath, 'utf8');
@@ -221,7 +305,7 @@ export class GitAnalyzer {
               addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
             },
             fileDiffs,
-            targetDirectory,
+            targetDirectory: resolvedTarget,
           });
         } else if (baseRef.kind === 'empty-tree') {
           if (baseRef.emptyKind === 'no-commits') {
@@ -250,7 +334,7 @@ export class GitAnalyzer {
                 addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
               },
               fileDiffs,
-              targetDirectory,
+              targetDirectory: resolvedTarget,
             });
           } else {
             // emptyKind === 'after-latest': all commits are at or after `since`
@@ -259,13 +343,13 @@ export class GitAnalyzer {
               ['diff', '--cached', 'HEAD', '--numstat'],
               activeFiles, fileStats,
               { add: (n: number) => (totalLinesAdded += n), remove: (n: number) => (totalLinesRemoved += n), addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n) },
-              targetDirectory,
+              resolvedTarget,
             );
             this.injectNumstatDiff(
               ['diff', 'HEAD', '--numstat'],
               activeFiles, fileStats,
               { add: (n: number) => (totalLinesAdded += n), remove: (n: number) => (totalLinesRemoved += n), addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n) },
-              targetDirectory,
+              resolvedTarget,
             );
             this.injectUntrackedIntoStatsAndDiffs({
               fileStats,
@@ -276,7 +360,7 @@ export class GitAnalyzer {
                 addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
               },
               fileDiffs,
-              targetDirectory,
+              targetDirectory: resolvedTarget,
             });
           }
         }
@@ -314,6 +398,21 @@ export class GitAnalyzer {
    * 3. 已删除文件确保 added/removed 一致处理
    */
   private getProjectChangesFallback(since: Date, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    const resolvedTarget = this.resolveTargetDirectory(targetDirectory);
+    if (targetDirectory && resolvedTarget === undefined) {
+      return {
+        totalFiles: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        netLinesAdded: 0,
+        totalLinesOfChangedFiles: 0,
+        files: [],
+        fileStats: new Map(),
+        emptyLinesAdded: 0,
+        emptyLinesRemoved: 0,
+      };
+    }
+
     try {
       const isGitAvailable = this.isGitReliable();
       let gitStatusWarning = '';
@@ -335,11 +434,11 @@ export class GitAnalyzer {
       const allFiles = this.getRepoFilesFromGlob();
       const mtimeActiveFiles = new Set<string>();
 
-      const targetFiles = this.filterByDirectory(allFiles, targetDirectory);
+      const targetFiles = this.filterByDirectory(allFiles, resolvedTarget);
 
       // Check mtime for each file (less accurate)
       for (const filePath of targetFiles) {
-        const fullPath = path.resolve(this.projectPath, filePath);
+        const fullPath = this.resolveProjectFilePath(filePath);
         try {
           const stats = fs.statSync(fullPath);
           if (stats.mtime >= since) {
@@ -374,7 +473,7 @@ export class GitAnalyzer {
       if (gitChangesMap) {
         for (const [filePath, stats] of gitChangesMap.entries()) {
           // Filter by target directory
-          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
+          if (resolvedTarget !== undefined && !this.isInTargetDirectory(filePath, resolvedTarget)) {
             continue;
           }
 
@@ -387,7 +486,7 @@ export class GitAnalyzer {
             continue;
           }
 
-          const fullPath = path.resolve(this.projectPath, filePath);
+          const fullPath = this.resolveProjectFilePath(filePath);
           const fileExists = fs.existsSync(fullPath);
 
           // For files with Git changes, always use Git stats regardless of mtime
@@ -428,7 +527,7 @@ export class GitAnalyzer {
           continue;
         }
 
-        const fullPath = path.resolve(this.projectPath, filePath);
+        const fullPath = this.resolveProjectFilePath(filePath);
 
         // For tracked files without Git changes, assume no content change (metadata only)
         if (trackedFiles.has(filePath)) {
@@ -485,6 +584,22 @@ export class GitAnalyzer {
    * 从特定基础提交获取项目变更（供 fallback 使用，保持与 Git-First 一致）
    */
   private getProjectChangesFromBaseCommit(baseCommit: string, targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    const resolvedTarget = this.resolveTargetDirectory(targetDirectory);
+    if (targetDirectory && resolvedTarget === undefined) {
+      return {
+        totalFiles: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        netLinesAdded: 0,
+        totalLinesOfChangedFiles: 0,
+        files: [],
+        fileStats: new Map(),
+        fileDiffs: new Map(),
+        emptyLinesAdded: 0,
+        emptyLinesRemoved: 0,
+      };
+    }
+
     try {
       const activeFiles = new Set<string>();
       let totalLinesAdded = 0;
@@ -498,7 +613,7 @@ export class GitAnalyzer {
 
       if (gitChangesMap) {
         for (const [filePath, stats] of gitChangesMap.entries()) {
-          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) {
+          if (resolvedTarget !== undefined && !this.isInTargetDirectory(filePath, resolvedTarget)) {
             continue;
           }
 
@@ -517,7 +632,7 @@ export class GitAnalyzer {
           totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
           fileStats.set(filePath, { added: stats.added, removed: stats.removed });
 
-          const fullPath = path.resolve(this.projectPath, filePath);
+          const fullPath = this.resolveProjectFilePath(filePath);
           if (fs.existsSync(fullPath)) {
             try {
               const content = fs.readFileSync(fullPath, 'utf8');
@@ -542,7 +657,7 @@ export class GitAnalyzer {
           addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
         },
         fileDiffs,
-        targetDirectory,
+        targetDirectory: resolvedTarget,
       });
 
       return {
@@ -568,12 +683,17 @@ export class GitAnalyzer {
    * 获取仓库中的所有文件
    */
   getRepoFiles(targetDirectory?: string): string[] {
-    const gitFiles = this.getRepoFilesFromGit();
-    if (gitFiles.length > 0) {
-      return this.filterByDirectory(gitFiles, targetDirectory);
+    const resolvedTarget = this.resolveTargetDirectory(targetDirectory);
+    if (targetDirectory && resolvedTarget === undefined) {
+      return [];
     }
 
-    return this.filterByDirectory(this.getRepoFilesFromGlob(), targetDirectory);
+    const gitFiles = this.getRepoFilesFromGit();
+    if (gitFiles.length > 0) {
+      return this.filterByDirectory(gitFiles, resolvedTarget);
+    }
+
+    return this.filterByDirectory(this.getRepoFilesFromGlob(), resolvedTarget);
   }
 
   /**
@@ -593,8 +713,17 @@ export class GitAnalyzer {
     }
   }
 
+  private isInTargetDirectory(filePath: string, targetDirectory: string): boolean {
+    if (targetDirectory === '') return true;
+    const prefix = targetDirectory + '/';
+    return filePath.startsWith(prefix);
+  }
+
   private filterByDirectory(files: string[], targetDirectory?: string): string[] {
     if (!targetDirectory) {
+      return files;
+    }
+    if (targetDirectory === '') {
       return files;
     }
 
@@ -713,6 +842,22 @@ export class GitAnalyzer {
   }
 
   private getProjectChangesFromEmptyTreeBaseline(targetDirectory?: string): { totalFiles: number; linesAdded: number; linesRemoved: number; netLinesAdded: number; totalLinesOfChangedFiles: number; files: string[]; fileStats: Map<string, { added: number, removed: number }>; fileDiffs?: Map<string, string>; gitStatusWarning?: string; emptyLinesAdded: number; emptyLinesRemoved: number } | undefined {
+    const resolvedTarget = this.resolveTargetDirectory(targetDirectory);
+    if (targetDirectory && resolvedTarget === undefined) {
+      return {
+        totalFiles: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        netLinesAdded: 0,
+        totalLinesOfChangedFiles: 0,
+        files: [],
+        fileStats: new Map(),
+        fileDiffs: new Map(),
+        emptyLinesAdded: 0,
+        emptyLinesRemoved: 0,
+      };
+    }
+
     try {
       const activeFiles = new Set<string>();
       const fileStats = new Map<string, { added: number, removed: number }>();
@@ -727,7 +872,7 @@ export class GitAnalyzer {
       const gitChangesMap = this.getGitChangesFromBaseline({ kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH, emptyKind: 'no-commits' });
       if (gitChangesMap) {
         for (const [filePath, stats] of gitChangesMap.entries()) {
-          if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) continue;
+          if (resolvedTarget !== undefined && !this.isInTargetDirectory(filePath, resolvedTarget)) continue;
           if (this.ignores.ignores(filePath)) continue;
           if (!this.isTextFile(filePath)) continue;
 
@@ -738,7 +883,7 @@ export class GitAnalyzer {
           totalEmptyLinesRemoved += (stats.emptyRemoved || 0);
           fileStats.set(filePath, { added: stats.added, removed: stats.removed });
 
-          const fullPath = path.resolve(this.projectPath, filePath);
+          const fullPath = this.resolveProjectFilePath(filePath);
           if (fs.existsSync(fullPath)) {
             try {
               const content = fs.readFileSync(fullPath, 'utf8');
@@ -806,7 +951,7 @@ export class GitAnalyzer {
           addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
         },
         fileDiffs,
-        targetDirectory,
+        targetDirectory: resolvedTarget,
       });
 
       return {
@@ -871,7 +1016,7 @@ export class GitAnalyzer {
   }): void {
     const untracked = this.getUntrackedFiles();
     for (const filePath of untracked) {
-      if (params.targetDirectory && !filePath.startsWith(params.targetDirectory + '/')) {
+      if (params.targetDirectory !== undefined && !this.isInTargetDirectory(filePath, params.targetDirectory)) {
         continue;
       }
       if (this.ignores.ignores(filePath)) {
@@ -881,7 +1026,7 @@ export class GitAnalyzer {
         continue;
       }
 
-      const fullPath = path.resolve(this.projectPath, filePath);
+      const fullPath = this.resolveProjectFilePath(filePath);
       if (!fs.existsSync(fullPath)) {
         continue;
       }
@@ -953,8 +1098,10 @@ export class GitAnalyzer {
         const added = parseInt(parts[0], 10);
         const removed = parseInt(parts[1], 10);
         if (isNaN(added) || isNaN(removed)) continue;
-        const filePath = parts[2];
-        if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) continue;
+        const rawPath = parts[2];
+        const filePath = this.toProjectRelativePath(rawPath);
+        if (filePath === null) continue;
+        if (targetDirectory !== undefined && !this.isInTargetDirectory(filePath, targetDirectory)) continue;
         if (this.ignores.ignores(filePath)) continue;
         if (!this.isTextFile(filePath)) continue;
         if (activeFiles.has(filePath)) continue;
@@ -995,8 +1142,9 @@ export class GitAnalyzer {
         const parts = line.split(' ');
         if (parts.length >= 4) {
           const bPath = parts[parts.length - 1];
-          currentFile = bPath.startsWith('b/') ? bPath.slice(2) : bPath;
-          currentDiff = [line];
+          const rawPath = bPath.startsWith('b/') ? bPath.slice(2) : bPath;
+          currentFile = this.toProjectRelativePath(rawPath);
+          currentDiff = currentFile ? [line] : [];
         } else {
           currentFile = null;
           currentDiff = [];
@@ -1057,7 +1205,8 @@ export class GitAnalyzer {
         const parts = line.split(' ');
         if (parts.length >= 4) {
           const bPath = parts[parts.length - 1];
-          currentFile = bPath.startsWith('b/') ? bPath.slice(2) : bPath;
+          const rawPath = bPath.startsWith('b/') ? bPath.slice(2) : bPath;
+          currentFile = this.toProjectRelativePath(rawPath);
         } else {
           currentFile = null;
         }
@@ -1116,9 +1265,10 @@ export class GitAnalyzer {
 
           const added = parseInt(parts[0], 10);
           const removed = parseInt(parts[1], 10);
-          const filePath = parts[2];
+          const rawPath = parts[2];
+          const filePath = this.toProjectRelativePath(rawPath);
 
-          if (isNaN(added) || isNaN(removed)) continue;
+          if (filePath === null || isNaN(added) || isNaN(removed)) continue;
 
           const current = changesMap.get(filePath) || { added: 0, removed: 0, emptyAdded: 0, emptyRemoved: 0 };
           current.added += added;

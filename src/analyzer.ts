@@ -34,7 +34,6 @@ export class ContributionAnalyzer {
   constructor(projectPath: string, verificationMode: VerificationMode = 'relaxed', targetDirectory?: string, since?: Date) {
     this.projectPath = path.resolve(projectPath);
     this.verificationMode = verificationMode;
-    this.targetDirectory = targetDirectory ? this.normalizeDirectory(targetDirectory) : undefined;
     this.since = since;
     this.historyProvider = new GitHistoryProvider(this.projectPath);
     this.scannerManager = new ScannerManager();
@@ -46,6 +45,8 @@ export class ContributionAnalyzer {
     this.ignores.add(DEFAULT_IGNORES);
 
     this.gitAnalyzer = new GitAnalyzer(this.projectPath, this.ignores);
+    // Resolve target directory to project-relative prefix to match GitAnalyzer semantics
+    this.targetDirectory = targetDirectory ? this.gitAnalyzer.resolveTargetDirectory(this.normalizeDirectory(targetDirectory)) : undefined;
   }
 
   /**
@@ -92,7 +93,7 @@ export class ContributionAnalyzer {
     const sessions = this.scanAllSessions(tools);
 
     // Filter session changes by target directory if specified
-    if (this.targetDirectory) {
+    if (this.targetDirectory !== undefined && this.targetDirectory !== '') {
       const prefix = this.targetDirectory + '/';
       for (const session of sessions) {
         session.changes = session.changes.filter(change =>
@@ -231,7 +232,7 @@ export class ContributionAnalyzer {
     this.loadGitignore();
     const sessions = this.scanAllSessions(tools);
 
-    if (this.targetDirectory) {
+    if (this.targetDirectory !== undefined && this.targetDirectory !== '') {
       const prefix = this.targetDirectory + '/';
       for (const session of sessions) {
         session.changes = session.changes.filter(change =>

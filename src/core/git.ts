@@ -132,7 +132,11 @@ export class GitAnalyzer {
 
       let gitStatusWarning: string | undefined;
       if (baseRef.kind === 'empty-tree') {
-        gitStatusWarning = 'since is earlier than first commit; using empty-tree baseline (repo-birth)';
+        if (baseRef.emptyKind === 'after-latest') {
+          gitStatusWarning = `since (${since.toLocaleDateString('zh-CN')}) is at or after the latest commit; using empty-tree baseline for uncommitted changes.`;
+        } else {
+          gitStatusWarning = 'since is earlier than first commit; using empty-tree baseline (repo-birth)';
+        }
       }
 
       // 3. Get changes from Git (committed + staged + working tree relative to baseline)
@@ -219,59 +223,62 @@ export class GitAnalyzer {
             fileDiffs,
             targetDirectory,
           });
-        } else {
-          const committedDiff = execFileSync('git', [
-            'diff',
-            GitAnalyzer.EMPTY_TREE_HASH,
-            'HEAD',
-            '--unified=0',
-            '--no-color',
-          ], {
-            cwd: this.projectPath,
-            encoding: 'utf-8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            maxBuffer: 50 * 1024 * 1024,
-          });
-          this.parseDiffContent(committedDiff, fileDiffs, '\n\n# committed(empty→HEAD)\n');
+        } else if (baseRef.kind === 'empty-tree') {
+          if (baseRef.emptyKind === 'no-commits') {
+            // Truly empty repo before `since` — diff full history from empty-tree to HEAD
+            const committedDiff = execFileSync('git', [
+              'diff',
+              GitAnalyzer.EMPTY_TREE_HASH,
+              'HEAD',
+              '--unified=0',
+              '--no-color',
+            ], {
+              cwd: this.projectPath,
+              encoding: 'utf-8',
+              stdio: ['ignore', 'pipe', 'ignore'],
+              maxBuffer: 50 * 1024 * 1024,
+            });
+            this.parseDiffContent(committedDiff, fileDiffs, '\n\n# committed(empty→HEAD)\n');
 
-          const stagedDiff = execFileSync('git', [
-            'diff',
-            '--cached',
-            'HEAD',
-            '--unified=0',
-            '--no-color',
-          ], {
-            cwd: this.projectPath,
-            encoding: 'utf-8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            maxBuffer: 50 * 1024 * 1024,
-          });
-          this.parseDiffContent(stagedDiff, fileDiffs, '\n\n# staged(HEAD→index)\n');
-
-          const unstagedDiff = execFileSync('git', [
-            'diff',
-            'HEAD',
-            '--unified=0',
-            '--no-color',
-          ], {
-            cwd: this.projectPath,
-            encoding: 'utf-8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            maxBuffer: 50 * 1024 * 1024,
-          });
-          this.parseDiffContent(unstagedDiff, fileDiffs, '\n\n# unstaged(HEAD→worktree)\n');
-
-          this.injectUntrackedIntoStatsAndDiffs({
-            fileStats,
-            activeFiles,
-            totalLines: {
-              add: (n: number) => (totalLinesAdded += n),
-              addEmpty: (n: number) => (totalEmptyLinesAdded += n),
-              addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
-            },
-            fileDiffs,
-            targetDirectory,
-          });
+            // Inject untracked files (no committed history before `since`)
+            this.injectUntrackedIntoStatsAndDiffs({
+              fileStats,
+              activeFiles,
+              totalLines: {
+                add: (n: number) => (totalLinesAdded += n),
+                addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+                addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+              },
+              fileDiffs,
+              targetDirectory,
+            });
+          } else {
+            // emptyKind === 'after-latest': all commits are at or after `since`
+            // No committed changes — report only staged, unstaged, and untracked files
+            this.injectNumstatDiff(
+              ['diff', '--cached', 'HEAD', '--numstat'],
+              activeFiles, fileStats,
+              { add: (n: number) => (totalLinesAdded += n), remove: (n: number) => (totalLinesRemoved += n), addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n) },
+              targetDirectory,
+            );
+            this.injectNumstatDiff(
+              ['diff', 'HEAD', '--numstat'],
+              activeFiles, fileStats,
+              { add: (n: number) => (totalLinesAdded += n), remove: (n: number) => (totalLinesRemoved += n), addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n) },
+              targetDirectory,
+            );
+            this.injectUntrackedIntoStatsAndDiffs({
+              fileStats,
+              activeFiles,
+              totalLines: {
+                add: (n: number) => (totalLinesAdded += n),
+                addEmpty: (n: number) => (totalEmptyLinesAdded += n),
+                addChangedFileLines: (n: number) => (totalLinesOfChangedFiles += n),
+              },
+              fileDiffs,
+              targetDirectory,
+            });
+          }
         }
       } catch {
         // Ignore diff errors
@@ -637,32 +644,38 @@ export class GitAnalyzer {
     }
   }
 
-  private resolveBaseRef(since: Date): { kind: 'commit' | 'empty-tree'; ref: string } | null {
+  private resolveBaseRef(since: Date):
+    | { kind: 'commit'; ref: string }
+    | { kind: 'empty-tree'; ref: string; emptyKind: 'no-commits' | 'after-latest' }
+    | null {
     if (!this.isGitReliable()) {
       return null;
     }
 
-    // repo may have no commits
+    let headCommit: string;
     try {
-      execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+      headCommit = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
         cwd: this.projectPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 5000,
-      });
+      }).trim();
     } catch {
       return null;
     }
 
     const baseCommit = this.getGitBaseCommit(since);
-    if (baseCommit) {
+    if (baseCommit && baseCommit !== headCommit) {
       return { kind: 'commit', ref: baseCommit };
     }
 
-    return { kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH };
+    // git rev-list returned null: all commits are after `since` → truly empty repo before `since`
+    // git rev-list returned HEAD: HEAD is the latest commit, nothing before `since`
+    // In both cases use empty-tree; caller will decide how to interpret
+    return { kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH, emptyKind: baseCommit === null ? 'no-commits' : 'after-latest' };
   }
 
-  private getGitChangesFromBaseline(base: { kind: 'commit' | 'empty-tree'; ref: string }): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {
+  private getGitChangesFromBaseline(base: { kind: 'commit'; ref: string } | { kind: 'empty-tree'; ref: string; emptyKind: 'no-commits' | 'after-latest' }): Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }> | undefined {
     if (base.kind === 'commit') {
       return this.getGitChangesFromBase(base.ref);
     }
@@ -673,6 +686,11 @@ export class GitAnalyzer {
     // because worktree/index diffs are not disjoint from empty→HEAD.
     // Minimal fix: compute one "final state" diff only: empty-tree → worktree.
     const changesMap = new Map<string, { added: number, removed: number, emptyAdded: number, emptyRemoved: number }>();
+
+    // For 'after-latest': all commits are at or after `since`, no committed diff to report
+    if (base.emptyKind === 'after-latest') {
+      return changesMap;
+    }
 
     try {
       const fullDiff = execFileSync('git', [
@@ -706,7 +724,7 @@ export class GitAnalyzer {
       let totalEmptyLinesRemoved = 0;
       let totalLinesOfChangedFiles = 0;
 
-      const gitChangesMap = this.getGitChangesFromBaseline({ kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH });
+      const gitChangesMap = this.getGitChangesFromBaseline({ kind: 'empty-tree', ref: GitAnalyzer.EMPTY_TREE_HASH, emptyKind: 'no-commits' });
       if (gitChangesMap) {
         for (const [filePath, stats] of gitChangesMap.entries()) {
           if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) continue;
@@ -909,6 +927,45 @@ export class GitAnalyzer {
       } catch {
         // ignore
       }
+    }
+  }
+
+  /**
+   * Parse `git diff --numstat` output and inject stats into activeFiles/fileStats.
+   * Used for staged/unstaged diffs where we need line counts without full diff text.
+   */
+  private injectNumstatDiff(
+    args: string[],
+    activeFiles: Set<string>,
+    fileStats: Map<string, { added: number; removed: number }>,
+    totalLines: { add: (n: number) => void; remove: (n: number) => void; addChangedFileLines: (n: number) => void },
+    targetDirectory?: string,
+  ): void {
+    try {
+      const output = execFileSync('git', args, {
+        cwd: this.projectPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      for (const line of output.split('\n')) {
+        const parts = line.split('\t');
+        if (parts.length < 3) continue;
+        const added = parseInt(parts[0], 10);
+        const removed = parseInt(parts[1], 10);
+        if (isNaN(added) || isNaN(removed)) continue;
+        const filePath = parts[2];
+        if (targetDirectory && !filePath.startsWith(targetDirectory + '/')) continue;
+        if (this.ignores.ignores(filePath)) continue;
+        if (!this.isTextFile(filePath)) continue;
+        if (activeFiles.has(filePath)) continue;
+        activeFiles.add(filePath);
+        totalLines.add(added);
+        totalLines.remove(removed);
+        totalLines.addChangedFileLines(added);
+        fileStats.set(filePath, { added, removed });
+      }
+    } catch {
+      // ignore
     }
   }
 
